@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(python)",
+      "Bash(pip show *)",
+      "Bash(python -m pip --version)",
+      "Bash(python -m pip install -r requirements.txt)",
+      "Bash(python -c \"from backend.app import create_app; from pathlib import Path; app = create_app\\(Path\\('.'\\).resolve\\(\\)\\); print\\('OK - app created'\\)\")",
+      "Bash(python app.py)",
+      "Bash(curl -s http://127.0.0.1:8765/api/config)",
+      "Bash(curl -s http://127.0.0.1:8765/api/sources)",
+      "Bash(curl -s http://127.0.0.1:8765/api/pdfs)",
+      "Bash(taskkill /F /IM python.exe /FI \"WINDOWTITLE eq myBookLM*\")",
+      "Bash(pkill -f \"app:app\")",
+      "Bash(python -m json.tool)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 37248 /F)",
+      "Bash(python -c \"from backend import embedding, sources, chat, routes; print\\('OK'\\)\")"
+    ]
+  }
+}

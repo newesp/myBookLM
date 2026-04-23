@@ -1,0 +1,283 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "PingFang TC",
+    "Microsoft JhengHei", sans-serif;
+  background: #f7f7f8; color: #222; font-size: 14px;
+  overflow: hidden;
+}
+code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px;
+  background: #eee; padding: 1px 5px; border-radius: 3px; }
+
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ========== Header ========== */
+header {
+  background: white; border-bottom: 1px solid #e5e5e5;
+  padding: 10px 20px; display: flex; align-items: center; gap: 20px;
+  flex-shrink: 0;
+}
+header h1 { font-size: 16px; font-weight: 600; }
+nav { display: flex; gap: 6px; }
+.tab {
+  background: transparent; border: 1px solid transparent;
+  padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 14px;
+  color: #444;
+}
+.tab:hover { background: #f0f0f0; }
+.tab.active { background: #1a73e8; color: white; }
+.header-right { margin-left: auto; font-size: 12px; color: #666; }
+
+main { flex: 1; overflow: hidden; position: relative; }
+
+/* ========== Tabs ========== */
+.tab-content { display: none; height: 100%; width: 100%; }
+#tab-chat.active { display: flex; }
+#tab-convert.active { display: block; overflow-y: auto; padding: 0; }
+#tab-settings.active { display: block; overflow-y: auto; padding: 30px; }
+
+/* ========== Chat ========== */
+.sidebar {
+  width: 280px; background: white;
+  display: flex; flex-direction: column; padding: 14px;
+  flex-shrink: 0; min-width: 180px; max-width: 600px;
+}
+.sidebar-resizer {
+  width: 5px; cursor: col-resize; background: #e5e5e5;
+  flex-shrink: 0; transition: background 0.15s;
+}
+.sidebar-resizer:hover, .sidebar-resizer.dragging { background: #1a73e8; }
+.sidebar-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 600; margin-bottom: 12px;
+}
+.icon-btn {
+  background: transparent; border: none; cursor: pointer; padding: 4px 8px;
+  border-radius: 4px; font-size: 14px; color: #555;
+}
+.icon-btn:hover { background: #eee; }
+.add-btn {
+  padding: 10px; border: 1px solid #e5e5e5; border-radius: 8px;
+  background: white; cursor: pointer; font-size: 14px; width: 100%;
+  margin-bottom: 10px;
+}
+.add-btn:hover { background: #f5f5f5; border-color: #999; }
+.select-all-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 4px; font-size: 13px;
+  border-bottom: 1px solid #eee; cursor: pointer;
+}
+#source-list {
+  list-style: none; overflow-y: auto; flex: 1; margin-top: 4px;
+}
+#source-list li {
+  padding: 10px 6px; display: flex; align-items: flex-start; gap: 10px;
+  border-radius: 6px; font-size: 13px; border-bottom: 1px solid #f0f0f0;
+}
+#source-list li:hover { background: #f8f8f8; }
+#source-list li input[type=checkbox] { margin-top: 2px; }
+#source-list li .title-block { flex: 1; min-width: 0; }
+#source-list li .title-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 500;
+}
+#source-list li .meta { font-size: 11px; color: #999; margin-top: 2px; }
+#source-list li .delete {
+  opacity: 0.4; cursor: pointer; font-size: 12px; padding: 2px 6px;
+}
+#source-list li .delete:hover { opacity: 1; color: #c00; }
+
+.chat-main { flex: 1; display: flex; flex-direction: column; background: #fafafa; min-width: 0; }
+.chat-header {
+  padding: 10px 20px; background: white; border-bottom: 1px solid #e5e5e5;
+  display: flex; justify-content: space-between; align-items: center;
+  flex-shrink: 0;
+}
+.chat-actions { display: flex; gap: 8px; align-items: center; }
+#conv-picker {
+  font-size: 12px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;
+  background: white;
+}
+#messages {
+  flex: 1; overflow-y: auto; padding: 20px;
+}
+.message {
+  max-width: 800px; margin: 0 auto 14px;
+  padding: 14px 18px; border-radius: 12px;
+  line-height: 1.6; word-wrap: break-word;
+}
+.message.user { background: #e8f0fe; border: 1px solid #d2e3fc; }
+.message.assistant { background: white; border: 1px solid #e5e5e5; }
+.message .role {
+  font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.message .content { white-space: pre-wrap; }
+.message .meta {
+  font-size: 11px; color: #999; margin-top: 8px;
+  padding-top: 6px; border-top: 1px solid #f0f0f0;
+}
+.save-source-btn {
+  margin-top: 8px; padding: 4px 10px; font-size: 11px;
+  background: #f0f7ff; border: 1px solid #c2d9f7; border-radius: 4px;
+  cursor: pointer; color: #1a73e8;
+}
+.save-source-btn:hover { background: #dceeff; }
+
+.type-badge {
+  display: inline-block; font-size: 10px; padding: 1px 5px;
+  border-radius: 3px; font-weight: 600; vertical-align: middle;
+}
+.badge-skill { background: #e8f5e9; color: #2e7d32; }
+.badge-emb { background: #ede7f6; color: #5e35b1; }
+
+/* Loading spinner */
+.message.loading .content {
+  color: #888; font-style: italic;
+  display: flex; align-items: center; gap: 8px;
+}
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid #ddd; border-top-color: #1a73e8;
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Disabled PDF buttons */
+.pdf-btns button:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.pdf-btns button.loading {
+  pointer-events: none;
+}
+.empty-chat {
+  max-width: 500px; margin: 80px auto; text-align: center; color: #999;
+  font-size: 14px;
+}
+
+.chat-input-row {
+  border-top: 1px solid #e5e5e5; background: white;
+  padding: 14px 20px; display: flex; flex-direction: column; gap: 8px;
+  flex-shrink: 0;
+}
+#chat-input {
+  width: 100%; border: 1px solid #e5e5e5; border-radius: 10px;
+  padding: 12px; font-size: 14px; font-family: inherit; resize: vertical;
+  min-height: 60px;
+}
+#chat-input:focus { outline: none; border-color: #1a73e8; }
+.chat-input-footer {
+  display: flex; justify-content: space-between; align-items: center;
+}
+#sources-count { font-size: 12px; color: #666; }
+#send-btn {
+  background: #1a73e8; color: white; border: none; border-radius: 50%;
+  width: 36px; height: 36px; cursor: pointer; font-size: 16px;
+}
+#send-btn:hover:not(:disabled) { background: #1557b0; }
+#send-btn:disabled { background: #ccc; cursor: not-allowed; }
+.usage-footer {
+  padding: 6px 20px; font-size: 11px; color: #888; background: white;
+  border-top: 1px solid #f0f0f0; text-align: right;
+  flex-shrink: 0;
+}
+
+/* ========== Convert ========== */
+.convert-layout {
+  display: flex; width: 100%; height: 100%;
+}
+.pdf-picker, .jobs-panel {
+  flex: 1; padding: 24px; overflow-y: auto; height: 100%;
+}
+.pdf-picker { border-right: 1px solid #e5e5e5; background: white; }
+.jobs-panel { background: #fafafa; }
+.pdf-picker h2, .jobs-panel h2 { font-size: 16px; margin-bottom: 6px; }
+.hint { font-size: 12px; color: #666; margin-bottom: 14px; }
+.pdf-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+.upload-btn {
+  padding: 8px 14px; background: #1a73e8; color: white;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.upload-btn:hover { background: #1557b0; }
+#refresh-pdfs {
+  padding: 8px 14px; background: white; border: 1px solid #ccc;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+#pdf-list, #jobs-list { list-style: none; }
+#pdf-list li {
+  padding: 12px 14px; border: 1px solid #e5e5e5; border-radius: 8px;
+  margin-bottom: 8px; display: flex; justify-content: space-between;
+  align-items: center; background: white;
+}
+#pdf-list li strong { font-size: 13px; }
+#pdf-list li small { color: #999; font-size: 11px; }
+.pdf-btns { display: flex; gap: 6px; }
+.pdf-btns button {
+  padding: 6px 12px; border: none; border-radius: 6px;
+  cursor: pointer; font-size: 12px; white-space: nowrap;
+}
+.pdf-btns button:first-child { background: #1a73e8; color: white; }
+.pdf-btns button:first-child:hover { background: #1557b0; }
+.pdf-btns button:last-child { background: #6f42c1; color: white; }
+.pdf-btns button:last-child:hover { background: #5a32a3; }
+
+.job-card {
+  padding: 14px; border: 1px solid #e5e5e5; border-radius: 8px;
+  margin-bottom: 10px; background: white;
+}
+.job-card .title { font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+.job-card .status-line { font-size: 12px; color: #666; margin-bottom: 8px; }
+.job-card .progress {
+  height: 6px; background: #eee; border-radius: 3px; overflow: hidden;
+  margin: 6px 0;
+}
+.job-card .progress-bar {
+  height: 100%; background: #1a73e8; transition: width 0.3s;
+}
+.job-card .actions { margin-top: 10px; display: flex; gap: 6px; }
+.job-card button {
+  padding: 4px 12px; border: 1px solid #ccc; background: white;
+  border-radius: 4px; cursor: pointer; font-size: 12px;
+}
+.job-card button:hover { background: #f0f0f0; }
+.job-card .usage { font-size: 11px; color: #888; margin-top: 4px; }
+.job-card .err {
+  color: #c00; font-size: 12px; margin-top: 6px; padding: 6px;
+  background: #fef2f2; border-radius: 4px;
+}
+.status-running { color: #1a73e8; font-weight: 600; }
+.status-done { color: #0a7f3f; font-weight: 600; }
+.status-failed { color: #c00; font-weight: 600; }
+.status-paused { color: #e67e22; font-weight: 600; }
+.status-pending { color: #888; }
+
+/* ========== Settings ========== */
+.settings-wrap { max-width: 720px; }
+.settings-wrap h2 { margin-bottom: 20px; }
+.form-row { margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+.form-row label { min-width: 160px; font-weight: 500; }
+fieldset {
+  border: 1px solid #e5e5e5; border-radius: 8px; padding: 16px 20px;
+  margin-bottom: 16px; background: white;
+}
+fieldset legend { padding: 0 8px; font-weight: 600; font-size: 13px; }
+fieldset label {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  font-size: 13px;
+}
+fieldset input, fieldset select {
+  flex: 1; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+  font-family: inherit; font-size: 13px;
+}
+.pricing-row { display: flex; gap: 16px; }
+.pricing-row label { flex: 1; }
+.save-row {
+  margin-top: 20px; display: flex; align-items: center; gap: 14px;
+}
+#save-settings {
+  padding: 10px 28px; background: #1a73e8; color: white; border: none;
+  border-radius: 6px; cursor: pointer; font-size: 14px;
+}
+#save-settings:hover { background: #1557b0; }
+#settings-msg { font-size: 13px; color: #0a7f3f; }

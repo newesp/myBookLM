@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>myBookLM</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>📚 myBookLM</h1>
+    <nav>
+      <button class="tab active" data-tab="chat">對話</button>
+      <button class="tab" data-tab="convert">轉換</button>
+      <button class="tab" data-tab="settings">設定</button>
+    </nav>
+    <div class="header-right"><span id="provider-indicator"></span></div>
+  </header>
+
+  <main>
+    <!-- ========== Chat Tab ========== -->
+    <section id="tab-chat" class="tab-content active">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <span>來源</span>
+          <button id="refresh-sources" title="重新整理" class="icon-btn">⟳</button>
+        </div>
+        <button id="add-source-btn" class="add-btn">+ 新增來源</button>
+        <label class="select-all-row">
+          <span>選取所有來源</span>
+          <input type="checkbox" id="select-all-sources">
+        </label>
+        <ul id="source-list"></ul>
+      </aside>
+      <div class="sidebar-resizer" id="sidebar-resizer"></div>
+
+      <div class="chat-main">
+        <div class="chat-header">
+          <span>對話</span>
+          <div class="chat-actions">
+            <button id="new-chat-btn" title="新對話" class="icon-btn">+ 新對話</button>
+            <button id="clear-chat-btn" title="清空本對話訊息" class="icon-btn">🗑 清空</button>
+            <select id="conv-picker" title="切換對話"></select>
+          </div>
+        </div>
+        <div id="messages"></div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" placeholder="開始輸入..." rows="3"></textarea>
+          <div class="chat-input-footer">
+            <span id="sources-count">0 個來源</span>
+            <button id="send-btn">→</button>
+          </div>
+        </div>
+        <div class="usage-footer">
+          <span id="usage-info">目前對話累計：0 tokens</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Convert Tab ========== -->
+    <section id="tab-convert" class="tab-content">
+      <div class="convert-layout">
+        <div class="pdf-picker">
+          <h2>PDF 檔案</h2>
+          <p class="hint">檔案放在 <code>books/</code> 資料夾，或從下方上傳。點「轉換」開始處理。</p>
+          <div class="pdf-actions">
+            <label class="upload-btn">
+              選擇檔案上傳
+              <input type="file" id="pdf-upload" accept=".pdf" hidden>
+            </label>
+            <button id="refresh-pdfs">⟳ 重新整理</button>
+          </div>
+          <ul id="pdf-list"></ul>
+        </div>
+        <div class="jobs-panel">
+          <h2>轉換任務</h2>
+          <p class="hint">任務以章節為單位，可暫停 / 恢復 / 刪除。</p>
+          <ul id="jobs-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Settings Tab ========== -->
+    <section id="tab-settings" class="tab-content">
+      <div class="settings-wrap">
+        <h2>設定</h2>
+
+        <div class="form-row">
+          <label>啟用的 AI 提供者：</label>
+          <select id="active-provider">
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+            <option value="grok">Grok (x.ai)</option>
+            <option value="ollama">Ollama (本機)</option>
+          </select>
+        </div>
+
+        <fieldset>
+          <legend>Claude (Anthropic)</legend>
+          <label>API Key <input type="password" data-p="claude" data-f="api_key" placeholder="sk-ant-..."></label>
+          <label>Model <input type="text" data-p="claude" data-f="model"></label>
+          <label>Context 上限（字元）<input type="number" step="1000" data-p="claude" data-f="context_chars_limit"></label>
+          <div class="pricing-row">
+            <label>Input $/1M tokens <input type="number" step="0.01" data-p="claude" data-f="pricing.input_per_mtok"></label>
+            <label>Output $/1M tokens <input type="number" step="0.01" data-p="claude" data-f="pricing.output_per_mtok"></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Gemini (Google)</legend>
+          <label>API Key <input type="password" data-p="gemini" data-f="api_key"></label>
+          <label>Model <input type="text" data-p="gemini" data-f="model"></label>
+          <label>Context 上限（字元）<input type="number" step="1000" data-p="gemini" data-f="context_chars_limit"></label>
+          <div class="pricing-row">
+            <label>Input $/1M <input type="number" step="0.01" data-p="gemini" data-f="pricing.input_per_mtok"></label>
+            <label>Output $/1M <input type="number" step="0.01" data-p="gemini" data-f="pricing.output_per_mtok"></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Grok (x.ai)</legend>
+          <label>API Key <input type="password" data-p="grok" data-f="api_key"></label>
+          <label>Model <input type="text" data-p="grok" data-f="model"></label>
+          <label>Context 上限（字元）<input type="number" step="1000" data-p="grok" data-f="context_chars_limit"></label>
+          <div class="pricing-row">
+            <label>Input $/1M <input type="number" step="0.01" data-p="grok" data-f="pricing.input_per_mtok"></label>
+            <label>Output $/1M <input type="number" step="0.01" data-p="grok" data-f="pricing.output_per_mtok"></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Ollama (本機)</legend>
+          <label>Base URL <input type="text" data-p="ollama" data-f="base_url" placeholder="http://localhost:11434"></label>
+          <label>Chat Model <input type="text" data-p="ollama" data-f="model" placeholder="llama3.1"></label>
+          <label>Embedding Model <input type="text" data-p="ollama" data-f="embed_model" placeholder="nomic-embed-text">
+            <span class="hint" style="margin-left:6px">需先 ollama pull nomic-embed-text</span>
+          </label>
+          <label>num_ctx（context window）<input type="number" step="512" data-p="ollama" data-f="num_ctx">
+            <span class="hint" style="margin-left:6px">7B 模型建議 4096</span>
+          </label>
+          <label>Context 來源上限（字元）<input type="number" step="1000" data-p="ollama" data-f="context_chars_limit">
+            <span class="hint" style="margin-left:6px">≈ num_ctx × 3，建議 5000~10000</span>
+          </label>
+          <label>最大輸出 tokens <input type="number" step="256" data-p="ollama" data-f="max_output_tokens">
+            <span class="hint" style="margin-left:6px">7B 模型建議 1024</span>
+          </label>
+          <p class="hint">Ollama 不需 API key，只要本機有安裝並已 pull 對應模型。</p>
+        </fieldset>
+
+        <div class="save-row">
+          <button id="save-settings">儲存設定</button>
+          <span id="settings-msg"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
