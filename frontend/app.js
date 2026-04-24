@@ -96,19 +96,25 @@ function renderSources() {
         <div class="title-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
         <div class="meta">${sourceTypeBadge(s.types)} ${escapeHtml(chunkInfo)}</div>
       </div>
-      <span class="delete" title="刪除">✕</span>`;
+      <div class="source-menu-wrap">
+        <button class="source-menu-btn" title="選單">⋮</button>
+      </div>`;
     li.querySelector("input").addEventListener("change", (e) => {
       if (e.target.checked) state.selected.add(s.slug);
       else state.selected.delete(s.slug);
       updateSourcesCount();
       syncSelectAll();
     });
-    li.querySelector(".delete").addEventListener("click", async (e) => {
+    // Click title area → open reader
+    li.querySelector(".title-block").addEventListener("click", (e) => {
       e.stopPropagation();
-      if (!confirm(`刪除 ${s.name}？`)) return;
-      await api(`/sources/${s.slug}`, { method: "DELETE" });
-      state.selected.delete(s.slug);
-      loadSources();
+      openSourceReader(s.slug);
+    });
+    li.querySelector(".title-block").style.cursor = "pointer";
+    // Menu button
+    li.querySelector(".source-menu-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSourceMenu(e.currentTarget, s);
     });
     list.appendChild(li);
   });
@@ -130,6 +136,194 @@ $("#select-all-sources").addEventListener("change", (e) => {
 });
 $("#refresh-sources").addEventListener("click", loadSources);
 $("#add-source-btn").addEventListener("click", () => switchTab("convert"));
+
+// ---------- Source menu (rename / delete) ----------
+function closeSourceMenu() {
+  document.querySelectorAll(".source-menu-dropdown").forEach((el) => el.remove());
+}
+document.addEventListener("click", closeSourceMenu);
+
+function openSourceMenu(anchor, source) {
+  closeSourceMenu();
+  const wrap = anchor.parentElement;
+  const menu = document.createElement("div");
+  menu.className = "source-menu-dropdown";
+  menu.innerHTML = `
+    <button data-a="rename">✎ 重新命名</button>
+    <button data-a="delete" class="danger">🗑 刪除</button>`;
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  menu.querySelector("[data-a=rename]").addEventListener("click", async () => {
+    closeSourceMenu();
+    const newName = prompt("重新命名為：", source.name);
+    if (!newName || newName.trim() === source.name) return;
+    try {
+      await api(`/sources/${source.slug}`, {
+        method: "PATCH", body: { name: newName.trim() },
+      });
+      loadSources();
+    } catch (err) { alert("重新命名失敗：" + err.message); }
+  });
+  menu.querySelector("[data-a=delete]").addEventListener("click", async () => {
+    closeSourceMenu();
+    if (!confirm(`刪除「${source.name}」？此動作無法復原。`)) return;
+    try {
+      await api(`/sources/${source.slug}`, { method: "DELETE" });
+      state.selected.delete(source.slug);
+      loadSources();
+    } catch (err) { alert("刪除失敗：" + err.message); }
+  });
+  wrap.appendChild(menu);
+}
+
+// ---------- Source reader modal ----------
+const readerState = { slug: null, data: null, tab: null, chapterIdx: 0 };
+
+async function openSourceReader(slug) {
+  try {
+    const data = await api(`/sources/${slug}/content`);
+    readerState.slug = slug;
+    readerState.data = data;
+    readerState.tab = data.types[0] || "skill";
+    readerState.chapterIdx = 0;
+    renderReader();
+    $("#source-modal").hidden = false;
+  } catch (e) { alert("讀取來源失敗：" + e.message); }
+}
+function closeReader() {
+  $("#source-modal").hidden = true;
+  readerState.data = null;
+}
+$("#modal-close").addEventListener("click", closeReader);
+$("#source-modal").addEventListener("click", (e) => {
+  if (e.target.id === "source-modal") closeReader();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#source-modal").hidden) closeReader();
+});
+
+function renderReader() {
+  const d = readerState.data;
+  if (!d) return;
+  $("#modal-title-text").textContent = d.name;
+  const tabs = $("#modal-tabs");
+  tabs.innerHTML = "";
+  if (d.types.length > 1) {
+    d.types.forEach((t) => {
+      const b = document.createElement("button");
+      b.textContent = t === "skill" ? "📖 skill.md" : "🔎 embedding";
+      if (t === readerState.tab) b.classList.add("active");
+      b.addEventListener("click", () => { readerState.tab = t; renderReader(); });
+      tabs.appendChild(b);
+    });
+  }
+  const body = $("#modal-body");
+  body.innerHTML = "";
+  if (readerState.tab === "skill" && d.skill) body.appendChild(renderSkillReader(d.skill));
+  else if (readerState.tab === "embedding" && d.embedding) body.appendChild(renderEmbeddingReader(d.embedding));
+  else body.innerHTML = '<div style="padding:40px;color:#888;">（無內容）</div>';
+}
+
+function renderSkillReader(skill) {
+  const wrap = document.createElement("div");
+  wrap.className = "reader-skill";
+  const list = document.createElement("div");
+  list.className = "reader-chapter-list";
+  const content = document.createElement("div");
+  content.className = "reader-content";
+
+  const items = [{ title: "📘 主要 SKILL.md", content: skill.main_md, isMain: true }];
+  skill.chapters.forEach((ch, i) => items.push({ title: ch.title, content: ch.content, i }));
+
+  // Chapter list
+  const mainGroup = document.createElement("div");
+  mainGroup.className = "ch-group-title";
+  mainGroup.textContent = "總覽";
+  list.appendChild(mainGroup);
+  const mainItem = document.createElement("div");
+  mainItem.className = "ch-item";
+  mainItem.textContent = "📘 SKILL.md";
+  list.appendChild(mainItem);
+
+  const chaptersGroup = document.createElement("div");
+  chaptersGroup.className = "ch-group-title";
+  chaptersGroup.textContent = `章節 (${skill.chapters.length})`;
+  list.appendChild(chaptersGroup);
+
+  const chapterEls = [mainItem];
+  skill.chapters.forEach((ch, i) => {
+    const el = document.createElement("div");
+    el.className = "ch-item";
+    el.textContent = ch.title;
+    list.appendChild(el);
+    chapterEls.push(el);
+  });
+
+  const setActive = (idx) => {
+    readerState.chapterIdx = idx;
+    chapterEls.forEach((el, i) => el.classList.toggle("active", i === idx));
+    content.innerHTML = renderMarkdown(items[idx].content);
+    content.scrollTop = 0;
+  };
+  chapterEls.forEach((el, i) => el.addEventListener("click", () => setActive(i)));
+  setActive(Math.min(readerState.chapterIdx, items.length - 1));
+
+  wrap.appendChild(list);
+  wrap.appendChild(content);
+  return wrap;
+}
+
+function renderEmbeddingReader(emb) {
+  const wrap = document.createElement("div");
+  wrap.className = "reader-embed";
+  const toolbar = document.createElement("div");
+  toolbar.className = "reader-embed-toolbar";
+  toolbar.innerHTML = `
+    <input type="search" placeholder="搜尋片段內容…（純文字比對）" id="chunk-search">
+    <span class="stat" id="chunk-stat">共 ${emb.count} 片段</span>`;
+  const chunks = document.createElement("div");
+  chunks.className = "reader-embed-chunks";
+
+  const renderChunks = (q) => {
+    chunks.innerHTML = "";
+    const query = (q || "").trim().toLowerCase();
+    let shown = 0;
+    emb.chunks.forEach((c) => {
+      if (query && !c.text.toLowerCase().includes(query)) return;
+      shown++;
+      const card = document.createElement("div");
+      card.className = "chunk-card";
+      let text = escapeHtml(c.text);
+      if (query) {
+        const re = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+        text = text.replace(re, "<mark>$1</mark>");
+      }
+      card.innerHTML = `<div class="chunk-head">#${c.idx}</div>${text}`;
+      chunks.appendChild(card);
+    });
+    $("#chunk-stat").textContent = query
+      ? `顯示 ${shown} / ${emb.count} 片段`
+      : `共 ${emb.count} 片段`;
+    if (shown === 0) {
+      chunks.innerHTML = '<div style="color:#888;padding:30px;text-align:center;">沒有符合的片段。</div>';
+    }
+  };
+
+  wrap.appendChild(toolbar);
+  wrap.appendChild(chunks);
+  // Render after element is in DOM so #chunk-stat/#chunk-search queryable
+  setTimeout(() => {
+    renderChunks("");
+    $("#chunk-search").addEventListener("input", (e) => renderChunks(e.target.value));
+  }, 0);
+  return wrap;
+}
+
+function renderMarkdown(md) {
+  if (window.marked) {
+    try { return window.marked.parse(md); } catch {}
+  }
+  return `<pre>${escapeHtml(md)}</pre>`;
+}
 
 // ---------- Conversations ----------
 async function loadConvs() {

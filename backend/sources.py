@@ -81,6 +81,94 @@ def _parse_frontmatter(path: Path) -> dict:
     return info
 
 
+def get_source_content(skills_dir: Path, slug: str) -> dict:
+    """Return full content for viewer.
+    - skill: main SKILL.md + list of chapters {filename, title, content}
+    - embedding: all chunks with idx + text
+    Either/both can be present depending on source types.
+    """
+    result: dict = {"slug": slug, "name": slug, "types": [], "skill": None, "embedding": None}
+    sub = skills_dir / slug
+    if sub.exists() and sub.is_dir():
+        skill_md = sub / "SKILL.md"
+        if skill_md.exists():
+            info = _parse_frontmatter(skill_md)
+            result["name"] = info.get("name", slug)
+            chapters: list[dict] = []
+            chapters_dir = sub / "chapters"
+            if chapters_dir.exists():
+                for ch in sorted(chapters_dir.glob("*.md")):
+                    content = ch.read_text(encoding="utf-8")
+                    ch_info = _parse_frontmatter(ch)
+                    title = ch_info.get("name") or ch_info.get("title") or ch.stem
+                    chapters.append({
+                        "filename": ch.name,
+                        "title": title,
+                        "content": content,
+                    })
+            result["skill"] = {
+                "main_md": skill_md.read_text(encoding="utf-8"),
+                "description": info.get("description", ""),
+                "chapters": chapters,
+            }
+            result["types"].append("skill")
+        meta_path = sub / "META.json"
+        if meta_path.exists() and not skill_md.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                result["name"] = meta.get("name", slug)
+            except Exception:
+                pass
+
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT chunk_idx, text FROM chunks WHERE source_slug=? ORDER BY chunk_idx ASC",
+            (slug,),
+        ).fetchall()
+    if rows:
+        result["embedding"] = {
+            "chunks": [{"idx": r["chunk_idx"], "text": r["text"]} for r in rows],
+            "count": len(rows),
+        }
+        result["types"].append("embedding")
+    return result
+
+
+def rename_source(skills_dir: Path, slug: str, new_name: str) -> bool:
+    """Update the display name. Slug/directory is NOT changed (it's the primary key)."""
+    sub = skills_dir / slug
+    if not sub.exists() or not sub.is_dir():
+        # Embedding-only with no directory: store name in META.json in the skills dir
+        sub.mkdir(parents=True, exist_ok=True)
+    skill_md = sub / "SKILL.md"
+    if skill_md.exists():
+        text = skill_md.read_text(encoding="utf-8")
+        m = re.match(r"^(---\s*\n)(.*?)(\n---\s*\n)", text, re.DOTALL)
+        if m:
+            fm = m.group(2)
+            if re.search(r"^name:\s*.*$", fm, re.MULTILINE):
+                fm = re.sub(r"^name:\s*.*$", f"name: {new_name}", fm, count=1, flags=re.MULTILINE)
+            else:
+                fm = f"name: {new_name}\n" + fm
+            text = m.group(1) + fm + m.group(3) + text[m.end():]
+        else:
+            text = f"---\nname: {new_name}\n---\n\n" + text
+        skill_md.write_text(text, encoding="utf-8")
+        return True
+    # No SKILL.md: write/update META.json
+    meta_path = sub / "META.json"
+    meta: dict = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    meta["name"] = new_name
+    meta["slug"] = slug
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
 def delete_source(skills_dir: Path, slug: str) -> bool:
     import shutil
     target = skills_dir / slug

@@ -1,7 +1,21 @@
+# Python
 __pycache__/
 *.pyc
-data/
-books/*.pdf
-!books/.gitkeep
+*.pyo
+*.egg-info/
 .venv/
+
+# App runtime data (DB, config with API keys)
+data/
+
+# User content — PDFs and generated sources
+books/*
+!books/.gitkeep
+skills/
+
+# Secrets
 .env
+
+# OS
+.DS_Store
+Thumbs.db

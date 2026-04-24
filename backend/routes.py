@@ -60,6 +60,24 @@ def delete_source(slug: str, request: Request):
     return {"ok": True}
 
 
+@router.get("/sources/{slug}/content")
+def get_source_content(slug: str, request: Request):
+    return sources.get_source_content(request.app.state.skills_dir, slug)
+
+
+class RenameSource(BaseModel):
+    name: str
+
+
+@router.patch("/sources/{slug}")
+def rename_source(slug: str, body: RenameSource, request: Request):
+    new_name = body.name.strip()
+    if not new_name:
+        raise HTTPException(400, "Name cannot be empty")
+    sources.rename_source(request.app.state.skills_dir, slug, new_name)
+    return {"ok": True, "slug": slug, "name": new_name}
+
+
 class SaveAsSourceBody(BaseModel):
     content: str
     title: str
