@@ -144,6 +144,17 @@ main { flex: 1; overflow: hidden; position: relative; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Source filter search */
+.source-filter {
+  width: 100%; padding: 7px 10px; margin: 8px 0 6px;
+  border: 1px solid #ddd; border-radius: 6px;
+  font-size: 13px; box-sizing: border-box;
+  background: #fafafa;
+}
+.source-filter:focus {
+  outline: none; border-color: #1a73e8; background: white;
+}
+
 /* Three-dot menu on source items */
 .source-menu-wrap { position: relative; }
 .source-menu-btn {

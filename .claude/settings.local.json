@@ -17,7 +17,23 @@
       "Bash(python -m json.tool)",
       "Bash(netstat -ano)",
       "Bash(taskkill /PID 37248 /F)",
-      "Bash(python -c \"from backend import embedding, sources, chat, routes; print\\('OK'\\)\")"
+      "Bash(python -c \"from backend import embedding, sources, chat, routes; print\\('OK'\\)\")",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"Reminder: after making code changes, check whether CLAUDE.md and README.md need to be updated to reflect the new behavior, endpoints, or architecture.\"}}'",
+            "statusMessage": "Checking if docs need updating…"
+          }
+        ]
+      }
     ]
   }
 }

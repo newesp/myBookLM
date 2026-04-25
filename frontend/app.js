@@ -11,6 +11,7 @@ const state = {
   jobs: [],
   config: null,
   sessionTokens: { in: 0, out: 0, cost: 0 },
+  sourceFilter: "",
 };
 
 // ---------- API helper ----------
@@ -86,7 +87,22 @@ function renderSources() {
     updateSourcesCount();
     return;
   }
-  state.sources.forEach((s) => {
+  // Sort by name (case-insensitive, locale-aware for CJK)
+  const sorted = [...state.sources].sort((a, b) =>
+    (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
+  );
+  // Apply filter
+  const q = state.sourceFilter.trim().toLowerCase();
+  const filtered = q
+    ? sorted.filter((s) => (s.name || "").toLowerCase().includes(q) || (s.slug || "").toLowerCase().includes(q))
+    : sorted;
+  if (filtered.length === 0) {
+    list.innerHTML = `<li style="color:#999;padding:20px 6px;font-size:12px;">沒有符合「${escapeHtml(q)}」的來源。</li>`;
+    updateSourcesCount();
+    syncSelectAll();
+    return;
+  }
+  filtered.forEach((s) => {
     const li = document.createElement("li");
     const checked = state.selected.has(s.slug);
     const chunkInfo = s.chunk_count ? `${s.chunk_count} 片段` : (s.chapter_count ? `${s.chapter_count} 章` : "");
@@ -136,6 +152,10 @@ $("#select-all-sources").addEventListener("change", (e) => {
 });
 $("#refresh-sources").addEventListener("click", loadSources);
 $("#add-source-btn").addEventListener("click", () => switchTab("convert"));
+$("#source-filter").addEventListener("input", (e) => {
+  state.sourceFilter = e.target.value;
+  renderSources();
+});
 
 // ---------- Source menu (rename / delete) ----------
 function closeSourceMenu() {
