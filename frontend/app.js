@@ -338,6 +338,19 @@ function renderEmbeddingReader(emb) {
   return wrap;
 }
 
+function openMessageModal(content) {
+  $("#modal-title-text").textContent = "AI 回應";
+  $("#modal-tabs").innerHTML = "";
+  const body = $("#modal-body");
+  body.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "reader-content";
+  wrap.style.flex = "1";
+  wrap.innerHTML = renderMarkdown(content);
+  body.appendChild(wrap);
+  $("#source-modal").hidden = false;
+}
+
 function renderMarkdown(md) {
   if (window.marked) {
     try { return window.marked.parse(md); } catch {}
@@ -417,8 +430,13 @@ function appendMessage(m, updateCounter = true) {
          <button class="save-source-btn">💾 存為來源</button>
          <button class="copy-btn">📋 複製</button>
        </div>` : "";
+  const expandBtnHtml = m.role === "assistant"
+    ? `<button class="msg-expand-btn" title="放大檢視">⛶</button>` : "";
   div.innerHTML = `
-    <div class="role">${roleText}</div>
+    <div class="msg-header">
+      <div class="role">${roleText}</div>
+      ${expandBtnHtml}
+    </div>
     <div class="content">${escapeHtml(m.content)}</div>
     ${metaHtml}
     ${actionsHtml}`;
@@ -435,6 +453,7 @@ function appendMessage(m, updateCounter = true) {
         setTimeout(() => { copyBtn.textContent = orig; copyBtn.disabled = false; }, 1500);
       } catch (e) { alert("複製失敗：" + e.message); }
     });
+    div.querySelector(".msg-expand-btn").addEventListener("click", () => openMessageModal(content));
   }
   box.appendChild(div);
   if (updateCounter) {
@@ -559,12 +578,15 @@ async function loadPDFs() {
       btnClicked.classList.add("loading");
       try {
         await api(endpoint, { method: "POST", body: { pdf_filename: p.name } });
-        loadJobs();
       } catch (e) {
         alert(errLabel + "：" + e.message);
+      } finally {
+        // Restore buttons regardless of outcome — the job is created (or failed
+        // to be created); whatever happens next belongs to the jobs panel.
         btns.forEach((b) => (b.disabled = false));
         btnClicked.textContent = origLabel;
         btnClicked.classList.remove("loading");
+        loadJobs();
       }
     };
     const skillBtn = li.querySelector("[data-action=skill]");

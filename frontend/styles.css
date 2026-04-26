@@ -117,6 +117,18 @@ main { flex: 1; overflow: hidden; position: relative; }
   font-size: 11px; color: #999; margin-top: 8px;
   padding-top: 6px; border-top: 1px solid #f0f0f0;
 }
+.msg-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.msg-header .role { margin-bottom: 0; }
+.msg-expand-btn {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 14px; color: #888; padding: 2px 7px; border-radius: 4px;
+  line-height: 1;
+}
+.msg-expand-btn:hover { background: #f0f0f0; color: #1a73e8; }
+
 .msg-actions {
   display: flex; gap: 6px; margin-top: 8px;
 }
@@ -186,15 +198,15 @@ main { flex: 1; overflow: hidden; position: relative; }
 /* Modal */
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 1000; padding: 24px;
+  display: flex; align-items: stretch; justify-content: stretch;
+  z-index: 1000; padding: 0;
 }
 .modal-backdrop[hidden] { display: none; }
 .modal {
-  background: white; border-radius: 10px;
-  width: min(1100px, 95vw); height: min(85vh, 900px);
+  background: white; border-radius: 0;
+  width: 100vw; height: 100vh;
   display: flex; flex-direction: column; overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  box-shadow: none;
 }
 .modal-header {
   display: flex; align-items: flex-start; justify-content: space-between;
