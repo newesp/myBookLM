@@ -5,7 +5,20 @@ from pathlib import Path
 from . import db
 
 
-def list_sources(skills_dir: Path) -> list[dict]:
+def list_sources(skills_dir: Path, topic_id: int | None = None) -> list[dict]:
+    """List sources, optionally filtered to those belonging to a topic.
+
+    topic_id=None or 0 means no filter (all sources).
+    """
+    allowed: set[str] | None = None
+    if topic_id:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT source_slug FROM source_topics WHERE topic_id=?",
+                (topic_id,),
+            ).fetchall()
+        allowed = {r["source_slug"] for r in rows}
+
     out: dict[str, dict] = {}
 
     if skills_dir.exists():
@@ -57,6 +70,8 @@ def list_sources(skills_dir: Path) -> list[dict]:
 
     # Filter out empty entries (dirs with no content at all)
     result = [v for v in out.values() if v["types"]]
+    if allowed is not None:
+        result = [v for v in result if v["slug"] in allowed]
     result.sort(key=lambda x: x["slug"])
     return result
 

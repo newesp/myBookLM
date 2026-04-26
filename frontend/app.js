@@ -12,7 +12,16 @@ const state = {
   config: null,
   sessionTokens: { in: 0, out: 0, cost: 0 },
   sourceFilter: "",
+  topics: [],
+  // 0 = "全部" (no filter); otherwise the active topic id used for filtering
+  // sources/conversations and as the assignment target for new items.
+  topicId: 0,
 };
+
+// Persist topic selection across reloads
+const SAVED_TOPIC_KEY = "myBookLM.topicId";
+const savedTopic = Number(localStorage.getItem(SAVED_TOPIC_KEY));
+if (!Number.isNaN(savedTopic)) state.topicId = savedTopic;
 
 // ---------- API helper ----------
 async function api(path, opts = {}) {
@@ -63,9 +72,313 @@ async function updateProviderIndicator() {
   } catch {}
 }
 
+// ---------- Topics ----------
+async function loadTopics() {
+  state.topics = await api("/topics");
+  // If the saved topic was deleted elsewhere, fall back to "全部".
+  if (state.topicId && !state.topics.find((t) => t.id === state.topicId)) {
+    state.topicId = 0;
+    localStorage.setItem(SAVED_TOPIC_KEY, "0");
+  }
+  renderTopicPicker();
+}
+
+function renderTopicPicker() {
+  const sel = $("#topic-picker");
+  sel.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "0";
+  allOpt.textContent = "🌐 全部";
+  sel.appendChild(allOpt);
+  state.topics.forEach((t) => {
+    const opt = document.createElement("option");
+    opt.value = String(t.id);
+    opt.textContent = `${t.name} (${t.source_count})`;
+    sel.appendChild(opt);
+  });
+  sel.value = String(state.topicId || 0);
+}
+
+$("#topic-picker").addEventListener("change", async (e) => {
+  state.topicId = Number(e.target.value) || 0;
+  localStorage.setItem(SAVED_TOPIC_KEY, String(state.topicId));
+  // Switching topic invalidates the current selection set, since slugs
+  // outside the new topic shouldn't stay checked.
+  state.selected.clear();
+  state.convId = null;
+  await Promise.all([loadSources(), loadConvs()]);
+});
+
+$("#manage-topics-btn").addEventListener("click", openTopicManager);
+
+function openTopicManager() {
+  $("#modal-title-text").textContent = "管理主題";
+  $("#modal-tabs").innerHTML = "";
+  const body = $("#modal-body");
+  body.innerHTML = "";
+  body.appendChild(renderTopicManager());
+  $("#source-modal").hidden = false;
+}
+
+function renderTopicManager() {
+  const wrap = document.createElement("div");
+  wrap.className = "topic-manager";
+  const list = document.createElement("ul");
+  list.className = "topic-list";
+  // First topic (lowest id) is the default — cannot be deleted.
+  const defaultId = state.topics.length ? state.topics[0].id : null;
+  state.topics.forEach((t) => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <div class="t-row">
+        <span class="t-name">${escapeHtml(t.name)}${t.id === defaultId ? ' <small style="color:#888">(預設)</small>' : ""}</span>
+        <span class="t-count">${t.source_count} 來源</span>
+        <span class="t-actions">
+          <button data-a="manage">📋 管理來源</button>
+          <button data-a="rename">✎ 改名</button>
+          ${t.id === defaultId ? "" : '<button data-a="delete" class="danger">🗑 刪除</button>'}
+        </span>
+      </div>
+      <div class="t-expand" hidden></div>`;
+    li.querySelector("[data-a=manage]").addEventListener("click", () => toggleTopicSourcePanel(li, t));
+    li.querySelector("[data-a=rename]").addEventListener("click", async () => {
+      const name = prompt("新名稱：", t.name);
+      if (!name || name.trim() === t.name) return;
+      try {
+        await api(`/topics/${t.id}`, { method: "PATCH", body: { name: name.trim() } });
+        await loadTopics();
+        body_refresh();
+      } catch (e) { alert("改名失敗：" + e.message); }
+    });
+    const delBtn = li.querySelector("[data-a=delete]");
+    if (delBtn) delBtn.addEventListener("click", async () => {
+      if (!confirm(`刪除主題「${t.name}」？\n（裡面的對話會搬到「預設」主題；來源不會被刪除）`)) return;
+      try {
+        await api(`/topics/${t.id}`, { method: "DELETE" });
+        if (state.topicId === t.id) {
+          state.topicId = 0;
+          localStorage.setItem(SAVED_TOPIC_KEY, "0");
+        }
+        await loadTopics();
+        await loadSources();
+        await loadConvs();
+        body_refresh();
+      } catch (e) { alert("刪除失敗：" + e.message); }
+    });
+    list.appendChild(li);
+  });
+
+  const addRow = document.createElement("div");
+  addRow.className = "topic-add-row";
+  addRow.innerHTML = `
+    <input type="text" id="new-topic-name" placeholder="新增主題名稱…">
+    <button id="new-topic-btn">+ 新增</button>`;
+  addRow.querySelector("#new-topic-btn").addEventListener("click", async () => {
+    const name = $("#new-topic-name").value.trim();
+    if (!name) return;
+    try {
+      await api("/topics", { method: "POST", body: { name } });
+      await loadTopics();
+      body_refresh();
+    } catch (e) { alert("新增失敗：" + e.message); }
+  });
+
+  function body_refresh() {
+    const body = $("#modal-body");
+    body.innerHTML = "";
+    body.appendChild(renderTopicManager());
+  }
+
+  wrap.appendChild(list);
+  wrap.appendChild(addRow);
+  return wrap;
+}
+
+async function toggleTopicSourcePanel(li, topic) {
+  const panel = li.querySelector(".t-expand");
+  // Toggle close
+  if (!panel.hidden) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  // Close any other open panel for clarity
+  document.querySelectorAll(".topic-list .t-expand").forEach((p) => {
+    if (p !== panel) { p.hidden = true; p.innerHTML = ""; }
+  });
+
+  // Need every source (irrespective of current topicId filter) and the
+  // current member list of this topic. Fetch both in parallel.
+  let allSources, members;
+  try {
+    [allSources, members] = await Promise.all([
+      api("/sources"),
+      api(`/sources?topic_id=${topic.id}`),
+    ]);
+  } catch (e) { alert("載入來源失敗：" + e.message); return; }
+
+  const checked = new Set(members.map((s) => s.slug));
+  let filter = "";
+
+  panel.innerHTML = `
+    <input type="search" class="t-source-filter" placeholder="🔍 搜尋來源…">
+    <label class="t-source-stat-row">
+      <input type="checkbox" class="t-select-all">
+      <span class="t-select-all-label">全選</span>
+      <span class="t-source-stat"></span>
+    </label>
+    <ul class="t-source-checklist"></ul>
+    <div class="t-expand-actions">
+      <button class="t-save">儲存</button>
+      <button class="t-cancel">取消</button>
+    </div>`;
+
+  const sortedAll = [...allSources].sort((a, b) =>
+    (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
+  );
+
+  // Tracks the most recently rendered filtered list — used by the
+  // "全選" toggle so it operates on what the user is actually seeing.
+  let lastFiltered = sortedAll;
+
+  const updateStat = () => {
+    const q = filter.trim();
+    panel.querySelector(".t-source-stat").textContent = q
+      ? `· 顯示 ${lastFiltered.length} / ${sortedAll.length} · 已選 ${checked.size}`
+      : `· 共 ${sortedAll.length} 來源 · 已選 ${checked.size}`;
+  };
+
+  const updateSelectAllBox = () => {
+    const box = panel.querySelector(".t-select-all");
+    if (!lastFiltered.length) {
+      box.checked = false; box.indeterminate = false; return;
+    }
+    const inSelection = lastFiltered.filter((s) => checked.has(s.slug)).length;
+    if (inSelection === 0) { box.checked = false; box.indeterminate = false; }
+    else if (inSelection === lastFiltered.length) { box.checked = true; box.indeterminate = false; }
+    else { box.checked = false; box.indeterminate = true; }
+  };
+
+  const renderList = () => {
+    const ul = panel.querySelector(".t-source-checklist");
+    ul.innerHTML = "";
+    const q = filter.trim().toLowerCase();
+    lastFiltered = q
+      ? sortedAll.filter((s) =>
+          (s.name || "").toLowerCase().includes(q) ||
+          (s.slug || "").toLowerCase().includes(q))
+      : sortedAll;
+    updateStat();
+    updateSelectAllBox();
+    if (!lastFiltered.length) {
+      ul.innerHTML = '<li class="empty">沒有符合的來源</li>';
+      return;
+    }
+    lastFiltered.forEach((s) => {
+      const item = document.createElement("li");
+      const id = `tsrc-${topic.id}-${s.slug}`;
+      item.innerHTML = `
+        <label for="${id}">
+          <input type="checkbox" id="${id}" ${checked.has(s.slug) ? "checked" : ""}>
+          <span class="src-name">${escapeHtml(s.name)}</span>
+          <span class="src-badges">${sourceTypeBadge(s.types)}</span>
+        </label>`;
+      item.querySelector("input").addEventListener("change", (e) => {
+        if (e.target.checked) checked.add(s.slug);
+        else checked.delete(s.slug);
+        updateStat();
+        updateSelectAllBox();
+      });
+      ul.appendChild(item);
+    });
+  };
+
+  panel.querySelector(".t-source-filter").addEventListener("input", (e) => {
+    filter = e.target.value;
+    renderList();
+  });
+  // 全選 toggle: applies to whatever is currently filtered/visible
+  panel.querySelector(".t-select-all").addEventListener("change", (e) => {
+    if (e.target.checked) lastFiltered.forEach((s) => checked.add(s.slug));
+    else lastFiltered.forEach((s) => checked.delete(s.slug));
+    renderList();
+  });
+  panel.querySelector(".t-save").addEventListener("click", async () => {
+    try {
+      await api(`/topics/${topic.id}/sources`, {
+        method: "PUT",
+        body: { slugs: Array.from(checked) },
+      });
+      await loadTopics();
+      await loadSources();
+      // Re-render the manager so source_count updates and the panel resets
+      const body = $("#modal-body");
+      body.innerHTML = "";
+      body.appendChild(renderTopicManager());
+    } catch (e) { alert("儲存失敗：" + e.message); }
+  });
+  panel.querySelector(".t-cancel").addEventListener("click", () => {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  });
+
+  renderList();
+  panel.hidden = false;
+}
+
+async function openSourceTopicsDialog(source) {
+  let current;
+  try {
+    current = await api(`/sources/${source.slug}/topics`);
+  } catch (e) { alert("讀取失敗：" + e.message); return; }
+  const checked = new Set(current.topic_ids);
+
+  $("#modal-title-text").textContent = `主題分類：${source.name}`;
+  $("#modal-tabs").innerHTML = "";
+  const body = $("#modal-body");
+  body.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "topic-assign";
+  const list = document.createElement("ul");
+  list.className = "topic-assign-list";
+  state.topics.forEach((t) => {
+    const li = document.createElement("li");
+    const id = `tassign-${t.id}`;
+    li.innerHTML = `
+      <label for="${id}">
+        <input type="checkbox" id="${id}" ${checked.has(t.id) ? "checked" : ""}>
+        ${escapeHtml(t.name)} <small style="color:#888">(${t.source_count} 來源)</small>
+      </label>`;
+    li.querySelector("input").addEventListener("change", (e) => {
+      if (e.target.checked) checked.add(t.id);
+      else checked.delete(t.id);
+    });
+    list.appendChild(li);
+  });
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "topic-assign-save";
+  saveBtn.textContent = "儲存";
+  saveBtn.addEventListener("click", async () => {
+    try {
+      await api(`/sources/${source.slug}/topics`, {
+        method: "PUT",
+        body: { topic_ids: Array.from(checked) },
+      });
+      $("#source-modal").hidden = true;
+      await loadTopics();
+      await loadSources();
+    } catch (e) { alert("儲存失敗：" + e.message); }
+  });
+  wrap.appendChild(list);
+  wrap.appendChild(saveBtn);
+  body.appendChild(wrap);
+  $("#source-modal").hidden = false;
+}
+
 // ---------- Sources ----------
 async function loadSources() {
-  state.sources = await api("/sources");
+  const q = state.topicId ? `?topic_id=${state.topicId}` : "";
+  state.sources = await api("/sources" + q);
   renderSources();
 }
 
@@ -170,6 +483,7 @@ function openSourceMenu(anchor, source) {
   menu.className = "source-menu-dropdown";
   menu.innerHTML = `
     <button data-a="rename">✎ 重新命名</button>
+    <button data-a="topics">🏷 主題分類…</button>
     <button data-a="delete" class="danger">🗑 刪除</button>`;
   menu.addEventListener("click", (e) => e.stopPropagation());
   menu.querySelector("[data-a=rename]").addEventListener("click", async () => {
@@ -182,6 +496,10 @@ function openSourceMenu(anchor, source) {
       });
       loadSources();
     } catch (err) { alert("重新命名失敗：" + err.message); }
+  });
+  menu.querySelector("[data-a=topics]").addEventListener("click", async () => {
+    closeSourceMenu();
+    await openSourceTopicsDialog(source);
   });
   menu.querySelector("[data-a=delete]").addEventListener("click", async () => {
     closeSourceMenu();
@@ -360,7 +678,8 @@ function renderMarkdown(md) {
 
 // ---------- Conversations ----------
 async function loadConvs() {
-  state.convs = await api("/conversations");
+  const q = state.topicId ? `?topic_id=${state.topicId}` : "";
+  state.convs = await api("/conversations" + q);
   const picker = $("#conv-picker");
   picker.innerHTML = "";
   if (state.convs.length === 0) {
@@ -387,7 +706,10 @@ $("#conv-picker").addEventListener("change", (e) => {
 });
 async function ensureConversation() {
   if (state.convId) return state.convId;
-  const conv = await api("/conversations", { method: "POST" });
+  const conv = await api("/conversations", {
+    method: "POST",
+    body: { topic_id: state.topicId || null },
+  });
   state.convId = conv.id;
   await loadConvs();
   return conv.id;
@@ -484,7 +806,7 @@ async function saveAsSource(content) {
   try {
     const r = await api("/sources/from-response", {
       method: "POST",
-      body: { content, title },
+      body: { content, title, topic_id: state.topicId || null },
     });
     alert(`已儲存為來源：${r.name}`);
     loadSources();
@@ -497,6 +819,25 @@ $("#send-btn").addEventListener("click", sendChat);
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
+// Auto-grow the textarea up to its CSS max-height; reset back to 1 line when emptied.
+(function setupChatInputAutogrow() {
+  const ta = $("#chat-input");
+  if (!ta) return;
+  const resize = () => {
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + "px";
+  };
+  ta.addEventListener("input", resize);
+  // Reset after send (sendChat clears the value)
+  const obs = new MutationObserver(() => { if (!ta.value) ta.style.height = ""; });
+  obs.observe(ta, { attributes: true, attributeFilter: ["value"] });
+  // Also catch the post-send clearing path
+  const origDescriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  Object.defineProperty(ta, "value", {
+    get() { return origDescriptor.get.call(this); },
+    set(v) { origDescriptor.set.call(this, v); if (!v) ta.style.height = ""; },
+  });
+})();
 function appendLoadingBubble() {
   const box = $("#messages");
   if (box.querySelector(".empty-chat")) box.innerHTML = "";
@@ -541,7 +882,10 @@ async function sendChat() {
 }
 $("#new-chat-btn").addEventListener("click", async () => {
   state.convId = null;
-  const conv = await api("/conversations", { method: "POST" });
+  const conv = await api("/conversations", {
+    method: "POST",
+    body: { topic_id: state.topicId || null },
+  });
   state.convId = conv.id;
   await loadConvs();
   resetSessionTokens();
@@ -577,7 +921,10 @@ async function loadPDFs() {
       btnClicked.innerHTML = '<span class="spinner"></span> 處理中…';
       btnClicked.classList.add("loading");
       try {
-        await api(endpoint, { method: "POST", body: { pdf_filename: p.name } });
+        await api(endpoint, {
+          method: "POST",
+          body: { pdf_filename: p.name, topic_id: state.topicId || null },
+        });
       } catch (e) {
         alert(errLabel + "：" + e.message);
       } finally {
@@ -755,6 +1102,9 @@ $("#save-settings").addEventListener("click", async () => {
 })();
 
 // ---------- Init ----------
-loadSources();
-loadConvs();
-updateProviderIndicator();
+(async () => {
+  await loadTopics();
+  await loadSources();
+  await loadConvs();
+  updateProviderIndicator();
+})();

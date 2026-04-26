@@ -8,6 +8,7 @@ A local alternative to NotebookLM. Convert PDFs into conversational knowledge so
 - **PDF → Embedding**: Vectorize PDF text directly for similarity-based retrieval at query time (fast, 30–90 seconds, preserves original text)
 - **Hybrid RAG chat**: Select sources in the left panel; chat uses full-text injection for skill.md sources and top-k retrieval for embedding sources
 - **Save as source**: Save any AI reply as a new mini skill.md source
+- **Topics**: Group sources by topic — pick a topic in the sidebar to scope the source list and conversation history; sources can belong to multiple topics
 - **Multiple AI providers**: Claude / Gemini / Grok / Ollama (local) — switchable at any time
 - **Conversation management**: Multiple conversations, clear history, token and cost display per message
 - **Job management**: Conversions can be paused, resumed, and deleted; resumes automatically from the last completed chapter after restart
@@ -51,6 +52,7 @@ myBookLM/
 │   ├── embedding.py    # PDF → embedding (Ollama nomic-embed-text)
 │   ├── llm.py          # Unified LLM interface (4 providers)
 │   ├── sources.py      # Source listing and deletion (clears DB chunks too)
+│   ├── topics.py       # Topic CRUD + many-to-many source membership
 │   ├── pdf_utils.py    # PDF text extraction (pypdf)
 │   ├── config.py       # Config read/write (data/config.json)
 │   └── db.py           # SQLite schema (jobs / conversations / messages / chunks)
@@ -80,6 +82,17 @@ myBookLM/
 
 **Save an AI reply as a source**
 - Click **💾 Save as source** below any AI reply and enter a title
+
+### Topics
+
+Sources can be grouped into topics so you can keep separate domains (e.g. 投資 / 哲學 / 工作) from polluting each other.
+
+- The topic dropdown at the top of the sidebar filters both the source list and the conversation list
+- Click ⚙ next to "主題" to add / rename / delete topics
+- New conversions, embeddings, and "save as source" actions are auto-assigned to the currently selected topic (or the default topic if "全部" is selected)
+- Use a source's ⋮ menu → **🏷 主題分類…** to add or remove a single source from any number of topics
+- In the topic manager, click **📋 管理來源** on any topic row to batch-assign existing sources to it — there's a search box for filtering when the source list is long, and saving here only changes membership for the selected topic (each source's other topic memberships are preserved)
+- "全部" shows everything regardless of topic; the default "預設" topic is created automatically and cannot be deleted
 
 ### Chat
 

@@ -16,7 +16,7 @@ import json
 import re
 from pathlib import Path
 
-from . import db, llm
+from . import db, llm, topics as topicmod
 from .pdf_utils import extract_pages, pages_to_text
 
 
@@ -116,6 +116,13 @@ async def _run_job(job_id: int, paths: dict, cfg: dict) -> None:
                 skill_dir=str(skill_dir),
                 total_chapters=len(chapters),
             )
+            # Assign the new source to the topic recorded on the job.
+            try:
+                topic_id = row["topic_id"] if "topic_id" in row.keys() else None
+            except Exception:
+                topic_id = None
+            if topic_id:
+                topicmod.add_source_to_topic(book_slug, topic_id)
         else:
             plan_data = json.loads(chapters_json)
             book_title = plan_data["book_title"]

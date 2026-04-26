@@ -22,6 +22,12 @@
     <section id="tab-chat" class="tab-content active">
       <aside class="sidebar">
         <div class="sidebar-header">
+          <span>主題</span>
+          <button id="manage-topics-btn" title="管理主題" class="icon-btn">⚙</button>
+        </div>
+        <select id="topic-picker" class="topic-picker"></select>
+
+        <div class="sidebar-header" style="margin-top:14px">
           <span>來源</span>
           <button id="refresh-sources" title="重新整理" class="icon-btn">⟳</button>
         </div>
@@ -46,11 +52,9 @@
         </div>
         <div id="messages"></div>
         <div class="chat-input-row">
-          <textarea id="chat-input" placeholder="開始輸入..." rows="3"></textarea>
-          <div class="chat-input-footer">
-            <span id="sources-count">0 個來源</span>
-            <button id="send-btn">→</button>
-          </div>
+          <textarea id="chat-input" placeholder="開始輸入..." rows="1"></textarea>
+          <span id="sources-count">0 個來源</span>
+          <button id="send-btn">→</button>
         </div>
         <div class="usage-footer">
           <span id="usage-info">目前對話累計：0 tokens</span>

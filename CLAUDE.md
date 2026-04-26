@@ -33,7 +33,9 @@ On startup, any job with `status='running'` is reset to `'paused'` (lifespan han
 
 **`backend/conversion.py`** — `slugify()` defined here (reuse it). `_running_tasks` dict. Chapter files are the checkpoint: if the file exists, the chapter is skipped on resume.
 
-**`backend/sources.py`** — `delete_source()` removes both the filesystem directory and DB chunks. `list_sources()` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table.
+**`backend/sources.py`** — `delete_source()` removes both the filesystem directory and DB chunks. `list_sources(skills_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned.
+
+**`backend/topics.py`** — Topic CRUD + many-to-many `source_topics` membership. `default_topic_id()` returns the lowest-id topic (seeded as "預設" by `init_db`). `add_source_to_topic(slug, topic_id)` is idempotent (`INSERT OR IGNORE`); jobs call it after the slug is finalized so newly-converted sources land in the topic the user was in. `delete_topic()` refuses to delete the default and reassigns its conversations to the default.
 
 ## Database schema highlights
 
@@ -41,20 +43,46 @@ On startup, any job with `status='running'` is reset to `'paused'` (lifespan han
 jobs: id, pdf_path, book_title, skill_slug, skill_dir,
       status, job_type('skill'|'embedding'),
       current_step, total_chapters, completed_chapters, chapters_json,
-      tokens_in, tokens_out, cost, error, provider, model
+      tokens_in, tokens_out, cost, error, provider, model,
+      topic_id  -- which topic the produced source should be assigned to
+
+conversations: id, title, created_at, updated_at, topic_id
 
 chunks: id, source_slug, chunk_idx, text, embedding BLOB
         INDEX idx_chunks_slug ON chunks(source_slug)
+
+topics: id, name, created_at
+        -- A "default" row is seeded by init_db (lowest id, name="預設").
+
+source_topics: source_slug, topic_id   -- many-to-many; PK both columns
+        INDEX idx_source_topics_topic, idx_source_topics_slug
 ```
 
-`job_type` was added after initial release — `init_db()` runs an `ALTER TABLE` migration for existing databases.
+`job_type`, `jobs.topic_id`, and `conversations.topic_id` were added after initial release — `init_db()` runs `ALTER TABLE` migrations for existing databases and backfills any null `conversations.topic_id` to the default topic.
 
 ## Frontend conventions
 
 - `data-p="ollama" data-f="embed_model"` — settings input binding. `data-f` supports dot notation (`pricing.input_per_mtok`).
 - `state.selected` is a `Set<string>` of slugs.
+- `state.topicId` (number, 0 = "全部" / no filter) drives source + conversation filtering and is persisted in `localStorage` under `myBookLM.topicId`. Switching topics clears `state.selected` and `state.convId` so stale slugs/conversations don't leak across topics.
 - PDF button disable pattern: `runConvert()` disables both buttons and shows a spinner; on success `loadJobs()` re-renders the list (buttons restore naturally); on error, buttons are re-enabled manually.
 - Sidebar width is persisted in `localStorage` via the resizer drag handler.
+
+## Topics API
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/topics` | List topics with `source_count` |
+| POST | `/api/topics` | `{name}` → create |
+| PATCH | `/api/topics/{id}` | `{name}` → rename |
+| DELETE | `/api/topics/{id}` | Delete (rejects default; reassigns conversations) |
+| GET | `/api/sources/{slug}/topics` | Returns `{slug, topic_ids: [..]}` |
+| PUT | `/api/sources/{slug}/topics` | `{topic_ids: [..]}` → replace this source's topic memberships |
+| PUT | `/api/topics/{id}/sources` | `{slugs: [..]}` → replace this topic's source list (preserves each slug's other topic memberships) |
+| GET | `/api/sources?topic_id=N` | `topic_id=0` (or omitted) returns all |
+| GET | `/api/conversations?topic_id=N` | Same convention |
+| POST | `/api/conversations` | Body `{topic_id}` (defaults to default topic) |
+| POST | `/api/jobs`, `/api/pdfs/embed`, `/api/sources/from-response` | Accept optional `topic_id`; the resulting source is auto-assigned |
 
 ## Important notes
 

@@ -19,7 +19,8 @@
       "Bash(taskkill /PID 37248 /F)",
       "Bash(python -c \"from backend import embedding, sources, chat, routes; print\\('OK'\\)\")",
       "Skill(update-config)",
-      "Skill(update-config:*)"
+      "Skill(update-config:*)",
+      "Bash(python -c \"from backend import db, sources, topics, routes, conversion, embedding, chat; print\\('OK'\\)\")"
     ]
   },
   "hooks": {

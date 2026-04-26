@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
-from . import db, config as cfgmod, sources, conversion, chat as chatmod, embedding as embmod
+from . import db, config as cfgmod, sources, conversion, chat as chatmod, embedding as embmod, topics as topicmod
 
 router = APIRouter()
 
@@ -47,8 +47,9 @@ def update_config(body: ConfigUpdate, request: Request):
 # ---------- Sources ----------
 
 @router.get("/sources")
-def get_sources(request: Request):
-    return sources.list_sources(request.app.state.skills_dir)
+def get_sources(request: Request, topic_id: int = 0):
+    tid = topic_id if topic_id and topic_id > 0 else None
+    return sources.list_sources(request.app.state.skills_dir, topic_id=tid)
 
 
 @router.delete("/sources/{slug}")
@@ -81,6 +82,7 @@ def rename_source(slug: str, body: RenameSource, request: Request):
 class SaveAsSourceBody(BaseModel):
     content: str
     title: str
+    topic_id: Optional[int] = None
 
 
 @router.post("/sources/from-response")
@@ -104,7 +106,73 @@ type: note
 {body.content}
 """
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    tid = body.topic_id or topicmod.default_topic_id()
+    topicmod.add_source_to_topic(slug, tid)
     return {"ok": True, "slug": slug, "name": body.title}
+
+
+# ---------- Topics ----------
+
+@router.get("/topics")
+def get_topics():
+    return topicmod.list_topics()
+
+
+class TopicCreate(BaseModel):
+    name: str
+
+
+@router.post("/topics")
+def create_topic(body: TopicCreate):
+    try:
+        return topicmod.create_topic(body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.patch("/topics/{topic_id}")
+def patch_topic(topic_id: int, body: TopicCreate):
+    try:
+        topicmod.rename_topic(topic_id, body.name)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/topics/{topic_id}")
+def remove_topic(topic_id: int):
+    try:
+        topicmod.delete_topic(topic_id)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# Per-source topic membership
+@router.get("/sources/{slug}/topics")
+def get_source_topics(slug: str):
+    return {"slug": slug, "topic_ids": topicmod.get_source_topics(slug)}
+
+
+class SetSourceTopics(BaseModel):
+    topic_ids: list[int]
+
+
+@router.put("/sources/{slug}/topics")
+def put_source_topics(slug: str, body: SetSourceTopics):
+    topicmod.set_source_topics(slug, body.topic_ids)
+    return {"ok": True}
+
+
+# Per-topic source membership (batch assign sources to a topic)
+class SetTopicSources(BaseModel):
+    slugs: list[str]
+
+
+@router.put("/topics/{topic_id}/sources")
+def put_topic_sources(topic_id: int, body: SetTopicSources):
+    topicmod.set_topic_sources(topic_id, body.slugs)
+    return {"ok": True}
 
 
 # ---------- PDFs ----------
@@ -132,6 +200,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
 
 class StartJob(BaseModel):
     pdf_filename: str
+    topic_id: Optional[int] = None
 
 
 @router.get("/jobs")
@@ -150,11 +219,12 @@ async def create_job(body: StartJob, request: Request):
     provider = cfg["active_provider"]
     pcfg = cfg["providers"][provider]
     model = pcfg.get("model", "")
+    tid = body.topic_id or topicmod.default_topic_id()
     with db.conn() as c:
         cur = c.execute(
-            "INSERT INTO jobs (pdf_path, status, job_type, provider, model, created_at, updated_at) "
-            "VALUES (?, 'pending', 'skill', ?, ?, ?, ?)",
-            (str(pdf_path), provider, model, db.now(), db.now()),
+            "INSERT INTO jobs (pdf_path, status, job_type, provider, model, topic_id, created_at, updated_at) "
+            "VALUES (?, 'pending', 'skill', ?, ?, ?, ?, ?)",
+            (str(pdf_path), provider, model, tid, db.now(), db.now()),
         )
         job_id = cur.lastrowid
         c.commit()
@@ -186,15 +256,18 @@ async def create_embed_job(body: StartJob, request: Request):
         )
 
     model = ollama_cfg.get("embed_model", "nomic-embed-text")
+    tid = body.topic_id or topicmod.default_topic_id()
     with db.conn() as c:
         cur = c.execute(
             "INSERT INTO jobs (pdf_path, book_title, skill_slug, skill_dir, status, "
-            "job_type, provider, model, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 'pending', 'embedding', 'ollama', ?, ?, ?)",
-            (str(pdf_path), pdf_path.stem, slug, str(skill_dir), model, db.now(), db.now()),
+            "job_type, provider, model, topic_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'pending', 'embedding', 'ollama', ?, ?, ?, ?)",
+            (str(pdf_path), pdf_path.stem, slug, str(skill_dir), model, tid, db.now(), db.now()),
         )
         job_id = cur.lastrowid
         c.commit()
+    # Slug is known up-front for embedding jobs — assign immediately.
+    topicmod.add_source_to_topic(slug, tid)
 
     await embmod.start_embed_job(job_id, str(pdf_path), slug, ollama_cfg)
     return {"job_id": job_id}
@@ -298,24 +371,36 @@ def delete_job(job_id: int, keep_files: bool = False):
 # ---------- Conversations ----------
 
 @router.get("/conversations")
-def list_convs():
-    with db.conn() as c:
-        rows = c.execute(
-            "SELECT * FROM conversations ORDER BY updated_at DESC"
-        ).fetchall()
+def list_convs(topic_id: int = 0):
+    if topic_id and topic_id > 0:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT * FROM conversations WHERE topic_id=? ORDER BY updated_at DESC",
+                (topic_id,),
+            ).fetchall()
+    else:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT * FROM conversations ORDER BY updated_at DESC"
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
+class CreateConv(BaseModel):
+    topic_id: Optional[int] = None
+
+
 @router.post("/conversations")
-def create_conv():
+def create_conv(body: CreateConv | None = None):
+    tid = (body.topic_id if body else None) or topicmod.default_topic_id()
     with db.conn() as c:
         cur = c.execute(
-            "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
-            ("新對話", db.now(), db.now()),
+            "INSERT INTO conversations (title, topic_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("新對話", tid, db.now(), db.now()),
         )
         cid = cur.lastrowid
         c.commit()
-    return {"id": cid, "title": "新對話"}
+    return {"id": cid, "title": "新對話", "topic_id": tid}
 
 
 @router.get("/conversations/{cid}/messages")

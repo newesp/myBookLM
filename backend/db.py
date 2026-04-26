@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS chunks (
     embedding BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_slug ON chunks(source_slug);
+
+CREATE TABLE IF NOT EXISTS topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_topics (
+    source_slug TEXT NOT NULL,
+    topic_id INTEGER NOT NULL,
+    PRIMARY KEY (source_slug, topic_id),
+    FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_source_topics_topic ON source_topics(topic_id);
+CREATE INDEX IF NOT EXISTS idx_source_topics_slug ON source_topics(source_slug);
 """
 
 _db_path: Path | None = None
@@ -68,6 +83,29 @@ def init_db(path: Path) -> None:
         existing_cols = {row[1] for row in c.execute("PRAGMA table_info(jobs)")}
         if "job_type" not in existing_cols:
             c.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'skill'")
+        # Migration: topic_id columns on jobs and conversations
+        if "topic_id" not in existing_cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN topic_id INTEGER")
+        conv_cols = {row[1] for row in c.execute("PRAGMA table_info(conversations)")}
+        if "topic_id" not in conv_cols:
+            c.execute("ALTER TABLE conversations ADD COLUMN topic_id INTEGER")
+
+        # Seed: ensure a default topic exists. Backfill any sources/conversations
+        # without an assignment so the existing setup keeps working.
+        existing_topic = c.execute("SELECT id FROM topics ORDER BY id ASC LIMIT 1").fetchone()
+        if existing_topic is None:
+            cur = c.execute(
+                "INSERT INTO topics (name, created_at) VALUES (?, ?)",
+                ("預設", now()),
+            )
+            default_id = cur.lastrowid
+        else:
+            default_id = existing_topic["id"]
+        # Backfill conversations without a topic
+        c.execute(
+            "UPDATE conversations SET topic_id=? WHERE topic_id IS NULL",
+            (default_id,),
+        )
         c.commit()
 
 
