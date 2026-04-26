@@ -412,16 +412,29 @@ function appendMessage(m, updateCounter = true) {
   if (m.cost) parts.push(`$${Number(m.cost).toFixed(4)}`);
   if (m.sources_used) parts.push(`來源：${m.sources_used}`);
   const metaHtml = parts.length ? `<div class="meta">${escapeHtml(parts.join(" · "))}</div>` : "";
-  const saveBtnHtml = m.role === "assistant"
-    ? `<button class="save-source-btn">💾 存為來源</button>` : "";
+  const actionsHtml = m.role === "assistant"
+    ? `<div class="msg-actions">
+         <button class="save-source-btn">💾 存為來源</button>
+         <button class="copy-btn">📋 複製</button>
+       </div>` : "";
   div.innerHTML = `
     <div class="role">${roleText}</div>
     <div class="content">${escapeHtml(m.content)}</div>
     ${metaHtml}
-    ${saveBtnHtml}`;
+    ${actionsHtml}`;
   if (m.role === "assistant") {
     const content = m.content;
     div.querySelector(".save-source-btn").addEventListener("click", () => saveAsSource(content));
+    const copyBtn = div.querySelector(".copy-btn");
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(content);
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = "✓ 已複製";
+        copyBtn.disabled = true;
+        setTimeout(() => { copyBtn.textContent = orig; copyBtn.disabled = false; }, 1500);
+      } catch (e) { alert("複製失敗：" + e.message); }
+    });
   }
   box.appendChild(div);
   if (updateCounter) {
@@ -613,14 +626,23 @@ async function loadJobs() {
     li.querySelectorAll("[data-a]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const a = btn.dataset.a;
+        if (a === "delete" && !confirm("刪除任務？會一併刪除已產生的來源資料。")) return;
+        const allBtns = li.querySelectorAll("[data-a]");
+        const orig = btn.innerHTML;
+        allBtns.forEach((b) => (b.disabled = true));
+        const labels = { pause: "暫停中…", resume: "啟動中…", delete: "刪除中…" };
+        btn.innerHTML = `<span class="spinner"></span> ${labels[a] || "處理中…"}`;
+        btn.classList.add("loading");
         try {
           if (a === "pause") await api(`/jobs/${j.id}/pause`, { method: "POST" });
           else if (a === "resume") await api(`/jobs/${j.id}/resume`, { method: "POST" });
-          else if (a === "delete") {
-            if (!confirm("刪除任務？會一併刪除已產生的來源資料。")) return;
-            await api(`/jobs/${j.id}`, { method: "DELETE" });
-          }
-        } catch (e) { alert(e.message); }
+          else if (a === "delete") await api(`/jobs/${j.id}`, { method: "DELETE" });
+        } catch (e) {
+          alert(e.message);
+          allBtns.forEach((b) => (b.disabled = false));
+          btn.innerHTML = orig;
+          btn.classList.remove("loading");
+        }
         loadJobs();
         loadSources();
       });

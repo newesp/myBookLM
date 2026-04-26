@@ -117,12 +117,16 @@ main { flex: 1; overflow: hidden; position: relative; }
   font-size: 11px; color: #999; margin-top: 8px;
   padding-top: 6px; border-top: 1px solid #f0f0f0;
 }
-.save-source-btn {
-  margin-top: 8px; padding: 4px 10px; font-size: 11px;
+.msg-actions {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.save-source-btn, .copy-btn {
+  padding: 4px 10px; font-size: 11px;
   background: #f0f7ff; border: 1px solid #c2d9f7; border-radius: 4px;
   cursor: pointer; color: #1a73e8;
 }
-.save-source-btn:hover { background: #dceeff; }
+.save-source-btn:hover, .copy-btn:hover { background: #dceeff; }
+.copy-btn:disabled { opacity: 0.7; cursor: default; }
 
 .type-badge {
   display: inline-block; font-size: 10px; padding: 1px 5px;
