@@ -496,11 +496,49 @@ main { flex: 1; overflow: hidden; position: relative; }
 #pdf-list, #jobs-list { list-style: none; }
 #pdf-list li {
   padding: 12px 14px; border: 1px solid #e5e5e5; border-radius: 8px;
-  margin-bottom: 8px; display: flex; justify-content: space-between;
-  align-items: center; background: white;
+  margin-bottom: 8px; background: white;
 }
-#pdf-list li strong { font-size: 13px; }
+#pdf-list li.pdf-item { display: block; }
+#pdf-list .pdf-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+}
+#pdf-list .pdf-meta { min-width: 0; flex: 1; }
+#pdf-list li strong {
+  font-size: 13px; word-break: break-all;
+}
 #pdf-list li small { color: #999; font-size: 11px; }
+.pdf-btns button.dim {
+  opacity: 0.55;
+}
+.pdf-btns button.dim:hover { opacity: 1; }
+
+/* Derived sources under each PDF */
+.derived-list {
+  list-style: none; padding: 0;
+  margin: 10px 0 0; border-top: 1px dashed #eee;
+}
+.derived-list li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0 6px; border: none !important;
+  border-radius: 0 !important; margin: 0 !important;
+  background: transparent !important;
+  font-size: 12px;
+}
+.derived-list .d-badges { flex-shrink: 0; }
+.derived-list .d-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #333; font-weight: 500;
+}
+.derived-list .d-stat { font-size: 11px; color: #888; flex-shrink: 0; }
+.derived-list .d-delete {
+  flex-shrink: 0; padding: 3px 10px; font-size: 11px;
+  background: white; border: 1px solid #ddd; border-radius: 4px;
+  color: #c62828; cursor: pointer;
+}
+.derived-list .d-delete:hover:not(:disabled) {
+  background: #ffebee; border-color: #f0c4c4;
+}
+.derived-list .d-delete:disabled { opacity: 0.6; cursor: default; }
 .pdf-btns { display: flex; gap: 6px; }
 .pdf-btns button {
   padding: 6px 12px; border: none; border-radius: 6px;

@@ -908,12 +908,77 @@ async function loadPDFs() {
   }
   state.pdfs.forEach((p) => {
     const li = document.createElement("li");
+    li.className = "pdf-item";
+    const derived = p.derived_sources || [];
+    const hasSkill = derived.some((d) => d.types && d.types.includes("skill"));
+    const hasEmb = derived.some((d) => d.types && d.types.includes("embedding"));
+    const skillTitle = hasSkill
+      ? "已轉過 skill.md — 點擊會再產生一份新的"
+      : "用 LLM 重寫為結構化 skill.md（慢，品質高）";
+    const embTitle = hasEmb
+      ? "已轉過 Embedding — 點擊會再向量化一次"
+      : "直接向量化（快，保留原文）";
+    const derivedHtml = derived.length
+      ? `<ul class="derived-list">${derived.map((d) => {
+          const badges = d.types && d.types.length
+            ? sourceTypeBadge(d.types)
+            : '<span class="type-badge" style="background:#fee;color:#c33">missing</span>';
+          const stat = d.chunk_count
+            ? `${d.chunk_count} 片段`
+            : (d.chapter_count ? `${d.chapter_count} 章` : "");
+          return `<li data-slug="${escapeHtml(d.slug)}">
+            <span class="d-badges">${badges}</span>
+            <span class="d-name" title="${escapeHtml(d.slug)}">${escapeHtml(d.name || d.slug)}</span>
+            <span class="d-stat">${escapeHtml(stat)}</span>
+            <button class="d-delete" data-slug="${escapeHtml(d.slug)}">🗑 刪除</button>
+          </li>`;
+        }).join("")}</ul>`
+      : "";
     li.innerHTML = `
-      <div><strong>${escapeHtml(p.name)}</strong><br><small>${p.size_mb} MB</small></div>
-      <div class="pdf-btns">
-        <button data-action="skill" title="用 LLM 重寫為結構化 skill.md（慢，品質高）">skill.md</button>
-        <button data-action="embed" title="直接向量化（快，保留原文）">Embedding</button>
-      </div>`;
+      <div class="pdf-row">
+        <div class="pdf-meta">
+          <strong>${escapeHtml(p.name)}</strong><br><small>${p.size_mb} MB</small>
+        </div>
+        <div class="pdf-btns">
+          <button data-action="skill" title="${skillTitle}"${hasSkill ? ' class="dim"' : ""}>skill.md${hasSkill ? " ↻" : ""}</button>
+          <button data-action="embed" title="${embTitle}"${hasEmb ? ' class="dim"' : ""}>Embedding${hasEmb ? " ↻" : ""}</button>
+        </div>
+      </div>
+      ${derivedHtml}`;
+
+    // Per-source delete buttons inside the derived list
+    li.querySelectorAll(".d-delete").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const slug = btn.dataset.slug;
+        // Block if a job is still running/paused/pending for this slug
+        const liveJob = (state.jobs || []).find(
+          (j) => j.skill_slug === slug && ["running", "paused", "pending"].includes(j.status)
+        );
+        if (liveJob) {
+          alert("這個來源還有未完成的轉換任務（" + liveJob.status + "）。\n請先到右側「轉換任務」暫停或刪除該任務再來。");
+          return;
+        }
+        const target = derived.find((d) => d.slug === slug);
+        const name = target?.name || slug;
+        if (!confirm(`刪除來源「${name}」？\n會移除產出的檔案 / chunks，但不影響原 PDF。`)) return;
+        const orig = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> 刪除中…';
+        try {
+          await api(`/sources/${slug}`, { method: "DELETE" });
+          state.selected.delete(slug);
+          await loadPDFs();
+          await loadSources();
+          await loadTopics();
+        } catch (err) {
+          alert("刪除失敗：" + err.message);
+          btn.disabled = false;
+          btn.innerHTML = orig;
+        }
+      });
+    });
+
     const runConvert = async (btnClicked, endpoint, errLabel) => {
       const btns = li.querySelectorAll("button");
       btns.forEach((b) => (b.disabled = true));
@@ -995,7 +1060,7 @@ async function loadJobs() {
     li.querySelectorAll("[data-a]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const a = btn.dataset.a;
-        if (a === "delete" && !confirm("刪除任務？會一併刪除已產生的來源資料。")) return;
+        if (a === "delete" && !confirm("刪除這筆轉換紀錄？\n（已產生的來源不會被刪除；要刪除來源請至左側 PDF 清單）")) return;
         const allBtns = li.querySelectorAll("[data-a]");
         const orig = btn.innerHTML;
         allBtns.forEach((b) => (b.disabled = true));
@@ -1005,7 +1070,7 @@ async function loadJobs() {
         try {
           if (a === "pause") await api(`/jobs/${j.id}/pause`, { method: "POST" });
           else if (a === "resume") await api(`/jobs/${j.id}/resume`, { method: "POST" });
-          else if (a === "delete") await api(`/jobs/${j.id}`, { method: "DELETE" });
+          else if (a === "delete") await api(`/jobs/${j.id}?keep_files=true`, { method: "DELETE" });
         } catch (e) {
           alert(e.message);
           allBtns.forEach((b) => (b.disabled = false));

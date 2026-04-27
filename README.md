@@ -11,7 +11,7 @@ A local alternative to NotebookLM. Convert PDFs into conversational knowledge so
 - **Topics**: Group sources by topic — pick a topic in the sidebar to scope the source list and conversation history; sources can belong to multiple topics
 - **Multiple AI providers**: Claude / Gemini / Grok / Ollama (local) — switchable at any time
 - **Conversation management**: Multiple conversations, clear history, token and cost display per message
-- **Job management**: Conversions can be paused, resumed, and deleted; resumes automatically from the last completed chapter after restart
+- **Job management**: Conversions can be paused, resumed, and have their log deleted; resumes automatically from the last completed chapter after restart. The right "轉換任務" panel is purely a log — to remove the actual produced source, expand the corresponding PDF in the left panel and use its delete button
 
 ## Installation
 

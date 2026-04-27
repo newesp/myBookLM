@@ -179,7 +179,9 @@ def put_topic_sources(topic_id: int, body: SetTopicSources):
 
 @router.get("/pdfs")
 def get_pdfs(request: Request):
-    return sources.list_pdfs(request.app.state.books_dir)
+    return sources.list_pdfs(
+        request.app.state.books_dir, request.app.state.skills_dir
+    )
 
 
 @router.post("/pdfs/upload")
@@ -268,6 +270,7 @@ async def create_embed_job(body: StartJob, request: Request):
         c.commit()
     # Slug is known up-front for embedding jobs — assign immediately.
     topicmod.add_source_to_topic(slug, tid)
+    sources.link_source_pdf(slug, pdf_path.name)
 
     await embmod.start_embed_job(job_id, str(pdf_path), slug, ollama_cfg)
     return {"job_id": job_id}

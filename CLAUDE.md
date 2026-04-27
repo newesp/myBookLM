@@ -33,7 +33,7 @@ On startup, any job with `status='running'` is reset to `'paused'` (lifespan han
 
 **`backend/conversion.py`** — `slugify()` defined here (reuse it). `_running_tasks` dict. Chapter files are the checkpoint: if the file exists, the chapter is skipped on resume.
 
-**`backend/sources.py`** — `delete_source()` removes both the filesystem directory and DB chunks. `list_sources(skills_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned.
+**`backend/sources.py`** — `delete_source()` removes the filesystem directory, DB chunks, `source_topics` rows, and `source_pdf` rows. `list_sources(skills_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned. `list_pdfs(books_dir, skills_dir)` also returns each PDF's `derived_sources: [{slug, name, types, chunk_count, chapter_count}]` by joining `source_pdf` with the source list. `link_source_pdf(slug, pdf_filename)` (called from `embedding.py` route handler and from `conversion.py` after the slug is finalized) is the only writer to `source_pdf`. A source whose `source_pdf` row points at a slug that no longer exists is surfaced with `missing: true` so the user can clean it up.
 
 **`backend/topics.py`** — Topic CRUD + many-to-many `source_topics` membership. `default_topic_id()` returns the lowest-id topic (seeded as "預設" by `init_db`). `add_source_to_topic(slug, topic_id)` is idempotent (`INSERT OR IGNORE`); jobs call it after the slug is finalized so newly-converted sources land in the topic the user was in. `delete_topic()` refuses to delete the default and reassigns its conversations to the default.
 
@@ -56,6 +56,13 @@ topics: id, name, created_at
 
 source_topics: source_slug, topic_id   -- many-to-many; PK both columns
         INDEX idx_source_topics_topic, idx_source_topics_slug
+
+source_pdf: slug PK, pdf_filename, created_at
+        INDEX idx_source_pdf_pdf
+        -- 'this slug was produced from this PDF'. One PDF may map to many
+        -- slugs (re-runs of skill / embed produce different slugs).
+        -- init_db backfills this from existing `jobs` rows so old data
+        -- still appears under its PDF in the new PDF panel.
 ```
 
 `job_type`, `jobs.topic_id`, and `conversations.topic_id` were added after initial release — `init_db()` runs `ALTER TABLE` migrations for existing databases and backfills any null `conversations.topic_id` to the default topic.
@@ -88,5 +95,5 @@ source_topics: source_slug, topic_id   -- many-to-many; PK both columns
 
 - `.gitignore` excludes `data/`, `books/*.pdf`, `skills/`, `.venv/`
 - `books/` keeps a `.gitkeep`
-- Deleting an embedding job with `keep_files=False` removes DB chunks but only removes the directory if it has no `SKILL.md` (i.e. it is embedding-only)
+- `DELETE /api/jobs/{id}` accepts `keep_files` (default `False`). Backend behavior: with `keep_files=False`, embedding jobs drop chunks (and remove the dir if it has no `SKILL.md`); skill jobs delete the whole `skills/{slug}` dir. With `keep_files=True`, only the `jobs` row is removed. **The frontend always passes `keep_files=true`** — the right-panel "刪除" is log-only by design; users delete actual sources from the per-PDF derived list in the left panel (which calls `DELETE /api/sources/{slug}`).
 - skill.md conversion requires a 7B+ LLM — 3B models reliably fail JSON planning

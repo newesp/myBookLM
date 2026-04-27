@@ -191,21 +191,88 @@ def delete_source(skills_dir: Path, slug: str) -> bool:
     if target.exists() and target.is_dir():
         shutil.rmtree(target, ignore_errors=True)
         deleted_files = True
-    # Delete embedding chunks from DB
+    # Delete embedding chunks, source-topic memberships, and PDF link from DB
     with db.conn() as c:
         c.execute("DELETE FROM chunks WHERE source_slug=?", (slug,))
+        c.execute("DELETE FROM source_topics WHERE source_slug=?", (slug,))
+        c.execute("DELETE FROM source_pdf WHERE slug=?", (slug,))
         c.commit()
     return deleted_files
 
 
-def list_pdfs(books_dir: Path) -> list[dict]:
-    out = []
+# ---------- PDF ↔ source linking ----------
+
+def link_source_pdf(slug: str, pdf_filename: str) -> None:
+    """Persist 'this slug came from this PDF'. Idempotent (REPLACE)."""
+    if not slug or not pdf_filename:
+        return
+    with db.conn() as c:
+        c.execute(
+            "INSERT INTO source_pdf (slug, pdf_filename, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(slug) DO UPDATE SET pdf_filename=excluded.pdf_filename",
+            (slug, pdf_filename, db.now()),
+        )
+        c.commit()
+
+
+def sources_for_pdf(pdf_filename: str) -> list[str]:
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT slug FROM source_pdf WHERE pdf_filename=? ORDER BY created_at ASC",
+            (pdf_filename,),
+        ).fetchall()
+    return [r["slug"] for r in rows]
+
+
+def list_pdfs(books_dir: Path, skills_dir: Path | None = None) -> list[dict]:
+    """List PDFs, each with the sources they have produced (skill / embedding).
+
+    `skills_dir` is needed to fill in source name + chapter_count for derived
+    sources. If omitted, derived_sources is still returned but with minimal
+    info (slug + types from the chunks table only).
+    """
+    out: list[dict] = []
     if not books_dir.exists():
         return out
+
+    # Build a map: pdf_filename -> [slug, ...]
+    with db.conn() as c:
+        link_rows = c.execute(
+            "SELECT slug, pdf_filename FROM source_pdf"
+        ).fetchall()
+    by_pdf: dict[str, list[str]] = {}
+    for r in link_rows:
+        by_pdf.setdefault(r["pdf_filename"], []).append(r["slug"])
+
+    # Resolve full source records once so we can attach them per PDF.
+    src_index: dict[str, dict] = {}
+    if skills_dir is not None:
+        for s in list_sources(skills_dir):
+            src_index[s["slug"]] = s
+
     for pdf in sorted(books_dir.glob("*.pdf")):
+        derived = []
+        for slug in by_pdf.get(pdf.name, []):
+            info = src_index.get(slug)
+            if info is None:
+                # Source row was deleted but link wasn't — surface as a
+                # ghost entry so the user can clean it up.
+                derived.append({
+                    "slug": slug, "name": slug, "types": [],
+                    "chapter_count": 0, "chunk_count": 0, "missing": True,
+                })
+            else:
+                derived.append({
+                    "slug": info["slug"],
+                    "name": info["name"],
+                    "types": info["types"],
+                    "chapter_count": info.get("chapter_count", 0),
+                    "chunk_count": info.get("chunk_count", 0),
+                })
         out.append({
             "name": pdf.name,
             "path": str(pdf),
             "size_mb": round(pdf.stat().st_size / 1_048_576, 2),
+            "derived_sources": derived,
         })
     return out

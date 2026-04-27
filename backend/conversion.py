@@ -16,7 +16,7 @@ import json
 import re
 from pathlib import Path
 
-from . import db, llm, topics as topicmod
+from . import db, llm, topics as topicmod, sources as sourcemod
 from .pdf_utils import extract_pages, pages_to_text
 
 
@@ -123,6 +123,8 @@ async def _run_job(job_id: int, paths: dict, cfg: dict) -> None:
                 topic_id = None
             if topic_id:
                 topicmod.add_source_to_topic(book_slug, topic_id)
+            # Persist 'this slug came from this PDF' for the PDF panel.
+            sourcemod.link_source_pdf(book_slug, pdf_path.name)
         else:
             plan_data = json.loads(chapters_json)
             book_title = plan_data["book_title"]

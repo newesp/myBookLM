@@ -68,6 +68,13 @@ CREATE TABLE IF NOT EXISTS source_topics (
 );
 CREATE INDEX IF NOT EXISTS idx_source_topics_topic ON source_topics(topic_id);
 CREATE INDEX IF NOT EXISTS idx_source_topics_slug ON source_topics(source_slug);
+
+CREATE TABLE IF NOT EXISTS source_pdf (
+    slug TEXT PRIMARY KEY,
+    pdf_filename TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_pdf_pdf ON source_pdf(pdf_filename);
 """
 
 _db_path: Path | None = None
@@ -106,6 +113,32 @@ def init_db(path: Path) -> None:
             "UPDATE conversations SET topic_id=? WHERE topic_id IS NULL",
             (default_id,),
         )
+
+        # Migration: backfill source_pdf from existing jobs.
+        # Each completed (or in-flight) job that produced a slug knows the
+        # originating PDF — preserve that link so old data isn't orphaned
+        # in the new PDF panel.
+        import os
+        existing_links = {
+            r["slug"] for r in c.execute("SELECT slug FROM source_pdf")
+        }
+        job_rows = c.execute(
+            "SELECT skill_slug, pdf_path, created_at FROM jobs "
+            "WHERE skill_slug IS NOT NULL AND skill_slug != ''"
+        ).fetchall()
+        for jr in job_rows:
+            slug = jr["skill_slug"]
+            if slug in existing_links:
+                continue
+            fname = os.path.basename(jr["pdf_path"]) if jr["pdf_path"] else ""
+            if not fname:
+                continue
+            c.execute(
+                "INSERT OR IGNORE INTO source_pdf (slug, pdf_filename, created_at) "
+                "VALUES (?, ?, ?)",
+                (slug, fname, jr["created_at"] or now()),
+            )
+            existing_links.add(slug)
         c.commit()
 
 
