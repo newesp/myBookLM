@@ -16,6 +16,9 @@ skills/
 # Secrets
 .env
 
+# Claude Code local settings (machine-specific permissions/hooks)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
