@@ -33,7 +33,7 @@ On startup, any job with `status='running'` is reset to `'paused'` (lifespan han
 
 **`backend/conversion.py`** — `slugify()` defined here (reuse it). `_running_tasks` dict. Chapter files are the checkpoint: if the file exists, the chapter is skipped on resume.
 
-**`backend/sources.py`** — `delete_source()` removes both the filesystem directory and DB chunks. `list_sources(skills_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned.
+**`backend/sources.py`** — `delete_source()` removes the filesystem directory plus DB chunks, source_topics rows, and source_pdf rows. `list_sources(skills_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned. `link_source_pdf(slug, pdf_filename)` is idempotent (`ON CONFLICT DO UPDATE`); called by `conversion.py` and the embed route once the slug is final. `list_pdfs(books_dir, skills_dir)` annotates each PDF with `derived_sources` (skill/embedding rows pulled from `source_pdf`, with a `missing: true` flag for orphaned links).
 
 **`backend/topics.py`** — Topic CRUD + many-to-many `source_topics` membership. `default_topic_id()` returns the lowest-id topic (seeded as "預設" by `init_db`). `add_source_to_topic(slug, topic_id)` is idempotent (`INSERT OR IGNORE`); jobs call it after the slug is finalized so newly-converted sources land in the topic the user was in. `delete_topic()` refuses to delete the default and reassigns its conversations to the default.
 
@@ -56,9 +56,16 @@ topics: id, name, created_at
 
 source_topics: source_slug, topic_id   -- many-to-many; PK both columns
         INDEX idx_source_topics_topic, idx_source_topics_slug
+
+source_pdf: slug PK, pdf_filename, created_at
+        -- Records 'this slug came from this PDF'. Survives job-log deletion
+        -- so the PDF panel can list its derived sources independently.
+        -- Note: column is `slug` (not `source_slug`) for backward compat
+        -- with an earlier ad-hoc schema in the wild.
+        INDEX idx_source_pdf_filename
 ```
 
-`job_type`, `jobs.topic_id`, and `conversations.topic_id` were added after initial release — `init_db()` runs `ALTER TABLE` migrations for existing databases and backfills any null `conversations.topic_id` to the default topic.
+`job_type`, `jobs.topic_id`, `conversations.topic_id`, and `source_pdf` were added after initial release — `init_db()` runs `ALTER TABLE` migrations for existing databases, backfills any null `conversations.topic_id` to the default topic, and backfills `source_pdf` from existing job rows (`os.path.basename(jobs.pdf_path)` keyed by `jobs.skill_slug`).
 
 ## Frontend conventions
 

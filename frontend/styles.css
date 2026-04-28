@@ -482,6 +482,18 @@ main { flex: 1; overflow: hidden; position: relative; }
 .pdf-picker { border-right: 1px solid #e5e5e5; background: white; }
 .jobs-panel { background: #fafafa; }
 .pdf-picker h2, .jobs-panel h2 { font-size: 16px; margin-bottom: 6px; }
+.jobs-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 6px;
+}
+.jobs-panel-header h2 { margin-bottom: 0; }
+.clear-done-btn {
+  padding: 6px 12px; font-size: 12px; background: white;
+  border: 1px solid #d0d0d0; border-radius: 6px; cursor: pointer;
+  color: #555; white-space: nowrap;
+}
+.clear-done-btn:hover:not(:disabled) { background: #f5f5f5; border-color: #999; }
+.clear-done-btn:disabled { opacity: 0.6; cursor: wait; }
 .hint { font-size: 12px; color: #666; margin-bottom: 14px; }
 .pdf-actions { display: flex; gap: 8px; margin-bottom: 14px; }
 .upload-btn {
@@ -494,22 +506,60 @@ main { flex: 1; overflow: hidden; position: relative; }
   border-radius: 6px; cursor: pointer; font-size: 13px;
 }
 #pdf-list, #jobs-list { list-style: none; }
-#pdf-list li {
+#pdf-list li.pdf-item {
   padding: 12px 14px; border: 1px solid #e5e5e5; border-radius: 8px;
-  margin-bottom: 8px; display: flex; justify-content: space-between;
-  align-items: center; background: white;
+  margin-bottom: 8px; background: white;
 }
-#pdf-list li strong { font-size: 13px; }
-#pdf-list li small { color: #999; font-size: 11px; }
-.pdf-btns { display: flex; gap: 6px; }
+.pdf-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+}
+.pdf-meta { flex: 1; min-width: 0; }
+.pdf-meta strong {
+  font-size: 13px; word-break: break-all; line-height: 1.35;
+  display: inline-block;
+}
+.pdf-meta small { color: #999; font-size: 11px; }
+.pdf-btns { display: flex; gap: 6px; flex-shrink: 0; }
 .pdf-btns button {
   padding: 6px 12px; border: none; border-radius: 6px;
   cursor: pointer; font-size: 12px; white-space: nowrap;
 }
-.pdf-btns button:first-child { background: #1a73e8; color: white; }
-.pdf-btns button:first-child:hover { background: #1557b0; }
-.pdf-btns button:last-child { background: #6f42c1; color: white; }
-.pdf-btns button:last-child:hover { background: #5a32a3; }
+.pdf-btns button[data-action="skill"] { background: #1a73e8; color: white; }
+.pdf-btns button[data-action="skill"]:hover { background: #1557b0; }
+.pdf-btns button[data-action="embed"] { background: #6f42c1; color: white; }
+.pdf-btns button[data-action="embed"]:hover { background: #5a32a3; }
+.pdf-btns button.dim { opacity: 0.55; }
+.pdf-btns button.dim:hover { opacity: 0.85; }
+
+/* Derived sources list under each PDF */
+.derived-list {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed #e5e5e5;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.derived-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 6px; font-size: 12px;
+}
+.derived-row:hover { background: #fafafa; }
+.d-badge {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px;
+  font-weight: 600; text-transform: lowercase;
+}
+.d-badge.skill { background: #e6f4ea; color: #137333; }
+.d-badge.emb { background: #ede7f6; color: #5a32a3; }
+.d-badge.missing { background: #fce8e6; color: #c5221f; }
+.d-name { flex: 1; min-width: 0; word-break: break-all; color: #333; }
+.d-meta { color: #999; font-size: 11px; flex-shrink: 0; }
+.d-delete {
+  padding: 3px 8px; border: 1px solid #e5e5e5; background: white;
+  border-radius: 4px; cursor: pointer; font-size: 11px; color: #666;
+  white-space: nowrap;
+}
+.d-delete:hover:not(:disabled) {
+  background: #fce8e6; border-color: #c5221f; color: #c5221f;
+}
+.d-delete:disabled { opacity: 0.6; cursor: wait; }
 
 .job-card {
   padding: 14px; border: 1px solid #e5e5e5; border-radius: 8px;

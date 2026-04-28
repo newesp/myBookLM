@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS source_topics (
 );
 CREATE INDEX IF NOT EXISTS idx_source_topics_topic ON source_topics(topic_id);
 CREATE INDEX IF NOT EXISTS idx_source_topics_slug ON source_topics(source_slug);
+
+-- Records "this source slug came from this PDF file" so the PDF panel can
+-- list its derived sources even after the originating job log is deleted.
+-- Column is named `slug` (not `source_slug`) to match an earlier schema
+-- already in the wild — see migration block in init_db.
+CREATE TABLE IF NOT EXISTS source_pdf (
+    slug TEXT PRIMARY KEY,
+    pdf_filename TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_pdf_filename ON source_pdf(pdf_filename);
 """
 
 _db_path: Path | None = None
@@ -106,6 +117,26 @@ def init_db(path: Path) -> None:
             "UPDATE conversations SET topic_id=? WHERE topic_id IS NULL",
             (default_id,),
         )
+        # Backfill source_pdf from jobs rows so existing data shows up in
+        # the new PDF panel even though we never recorded the link before.
+        import os
+        existing = {r["slug"] for r in c.execute("SELECT slug FROM source_pdf")}
+        for row in c.execute(
+            "SELECT skill_slug, pdf_path, created_at FROM jobs "
+            "WHERE skill_slug != '' AND pdf_path IS NOT NULL"
+        ).fetchall():
+            slug = row["skill_slug"]
+            if not slug or slug in existing:
+                continue
+            fname = os.path.basename(row["pdf_path"]) if row["pdf_path"] else ""
+            if not fname:
+                continue
+            c.execute(
+                "INSERT OR IGNORE INTO source_pdf (slug, pdf_filename, created_at) "
+                "VALUES (?, ?, ?)",
+                (slug, fname, row["created_at"] or now()),
+            )
+            existing.add(slug)
         c.commit()
 
 

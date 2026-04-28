@@ -908,14 +908,53 @@ async function loadPDFs() {
   }
   state.pdfs.forEach((p) => {
     const li = document.createElement("li");
+    li.className = "pdf-item";
+    const derived = Array.isArray(p.derived_sources) ? p.derived_sources : [];
+    // Dim a button when this PDF already produced that type of source —
+    // re-running the same conversion is rarely what the user wants.
+    const hasSkill = derived.some((d) => !d.missing && (d.types || []).includes("skill"));
+    const hasEmb = derived.some((d) => !d.missing && (d.types || []).includes("embedding"));
+    const skillCls = hasSkill ? "dim" : "";
+    const embCls = hasEmb ? "dim" : "";
+    const derivedRows = derived.map((d) => {
+      const types = d.types || [];
+      const badges = d.missing
+        ? `<span class="d-badge missing">missing</span>`
+        : types.map((t) =>
+            t === "skill"
+              ? `<span class="d-badge skill">skill</span>`
+              : `<span class="d-badge emb">emb</span>`
+          ).join("");
+      const meta = d.missing
+        ? ""
+        : types.includes("skill")
+        ? `<span class="d-meta">${d.chapter_count || 0} 章</span>`
+        : `<span class="d-meta">${d.chunk_count || 0} 片段</span>`;
+      return `
+        <div class="derived-row">
+          ${badges}
+          <span class="d-name">${escapeHtml(d.name || d.slug)}</span>
+          ${meta}
+          <button class="d-delete" data-slug="${escapeHtml(d.slug)}" title="刪除此來源">🗑 刪除</button>
+        </div>`;
+    }).join("");
+
     li.innerHTML = `
-      <div><strong>${escapeHtml(p.name)}</strong><br><small>${p.size_mb} MB</small></div>
-      <div class="pdf-btns">
-        <button data-action="skill" title="用 LLM 重寫為結構化 skill.md（慢，品質高）">skill.md</button>
-        <button data-action="embed" title="直接向量化（快，保留原文）">Embedding</button>
-      </div>`;
+      <div class="pdf-row">
+        <div class="pdf-meta">
+          <strong>${escapeHtml(p.name)}</strong><br>
+          <small>${p.size_mb} MB</small>
+        </div>
+        <div class="pdf-btns">
+          <button data-action="skill" class="${skillCls}" title="用 LLM 重寫為結構化 skill.md（慢，品質高）">skill.md${hasSkill ? " ↻" : ""}</button>
+          <button data-action="embed" class="${embCls}" title="直接向量化（快，保留原文）">Embedding${hasEmb ? " ↻" : ""}</button>
+        </div>
+      </div>
+      ${derived.length ? `<div class="derived-list">${derivedRows}</div>` : ""}
+    `;
+
     const runConvert = async (btnClicked, endpoint, errLabel) => {
-      const btns = li.querySelectorAll("button");
+      const btns = li.querySelectorAll(".pdf-btns button");
       btns.forEach((b) => (b.disabled = true));
       const origLabel = btnClicked.textContent;
       btnClicked.innerHTML = '<span class="spinner"></span> 處理中…';
@@ -934,12 +973,43 @@ async function loadPDFs() {
         btnClicked.textContent = origLabel;
         btnClicked.classList.remove("loading");
         loadJobs();
+        loadPDFs();
       }
     };
     const skillBtn = li.querySelector("[data-action=skill]");
     const embedBtn = li.querySelector("[data-action=embed]");
     skillBtn.addEventListener("click", () => runConvert(skillBtn, "/jobs", "建立任務失敗"));
     embedBtn.addEventListener("click", () => runConvert(embedBtn, "/pdfs/embed", "建立 Embedding 任務失敗"));
+
+    // Per-derived-source delete.
+    li.querySelectorAll(".d-delete").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const slug = btn.dataset.slug;
+        // Block deletion if a job for this slug is still active —
+        // otherwise we'd race the worker writing chapter files.
+        const blocking = (state.jobs || []).find(
+          (j) => j.skill_slug === slug && (j.status === "running" || j.status === "pending")
+        );
+        if (blocking) {
+          alert(`此來源仍有「${blocking.status}」的轉換任務,請先暫停或等任務完成。`);
+          return;
+        }
+        if (!confirm(`刪除來源「${slug}」?\n會一併移除已產生的檔案、向量、主題歸屬。`)) return;
+        const orig = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner"></span> 刪除中…`;
+        try {
+          await api(`/sources/${encodeURIComponent(slug)}`, { method: "DELETE" });
+          await loadPDFs();
+          await loadSources();
+        } catch (e) {
+          alert("刪除失敗：" + e.message);
+          btn.disabled = false;
+          btn.innerHTML = orig;
+        }
+      });
+    });
+
     ul.appendChild(li);
   });
 }
@@ -956,8 +1026,25 @@ $("#pdf-upload").addEventListener("change", async (e) => {
 });
 
 // ---------- Jobs ----------
+// Signature of last seen jobs state, used to decide whether the PDF list
+// (which shows derived sources per PDF) needs to be refreshed too.
+let _lastJobsSig = "";
+function _jobsSignature(jobs) {
+  // id + status + completed_chapters captures "something visible to the user changed"
+  return jobs.map((j) => `${j.id}:${j.status}:${j.completed_chapters}`).join("|");
+}
+
 async function loadJobs() {
   state.jobs = await api("/jobs");
+  const sig = _jobsSignature(state.jobs);
+  if (sig !== _lastJobsSig) {
+    const wasInitialised = _lastJobsSig !== "";
+    _lastJobsSig = sig;
+    // Skip the very first call (loadPDFs is already called alongside it on tab open).
+    // After that, any change in job state may have produced/removed a derived source,
+    // so refresh the left panel too.
+    if (wasInitialised) loadPDFs();
+  }
   const ul = $("#jobs-list");
   ul.innerHTML = "";
   if (state.jobs.length === 0) {
@@ -1024,6 +1111,29 @@ async function loadJobs() {
 setInterval(() => {
   if ($("#tab-convert").classList.contains("active")) loadJobs();
 }, 3000);
+
+// Clear all completed job log rows (does not touch produced sources).
+$("#clear-done-jobs").addEventListener("click", async () => {
+  const doneCount = state.jobs.filter((j) => j.status === "done").length;
+  if (doneCount === 0) {
+    alert("目前沒有已完成的任務紀錄。");
+    return;
+  }
+  if (!confirm(`清除 ${doneCount} 筆已完成的任務紀錄？\n\n此操作只移除紀錄，不會刪除已產生的來源。`)) return;
+  const btn = $("#clear-done-jobs");
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> 清除中…`;
+  try {
+    const r = await api("/jobs/done", { method: "DELETE" });
+    await loadJobs();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+});
 
 // ---------- Settings ----------
 async function loadConfig() {
