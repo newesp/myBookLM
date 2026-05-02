@@ -636,11 +636,17 @@ function updateSourcesCount() {
 }
 function syncSelectAll() {
   const cb = $("#select-all-sources");
-  cb.checked = state.sources.length > 0 && state.selected.size === state.sources.length;
+  const wikiAvailable = !!(state.wikiInfo && state.wikiInfo.exists);
+  const total = state.sources.length + (wikiAvailable ? 1 : 0);
+  cb.checked = total > 0 && state.selected.size === total;
 }
 $("#select-all-sources").addEventListener("change", (e) => {
-  if (e.target.checked) state.sources.forEach((s) => state.selected.add(s.slug));
-  else state.selected.clear();
+  if (e.target.checked) {
+    state.sources.forEach((s) => state.selected.add(s.slug));
+    if (state.wikiInfo && state.wikiInfo.exists) state.selected.add(WIKI_SLUG);
+  } else {
+    state.selected.clear();
+  }
   renderSources();
 });
 $("#refresh-sources").addEventListener("click", loadSources);
@@ -935,12 +941,15 @@ function appendMessage(m, updateCounter = true) {
        </div>` : "";
   const expandBtnHtml = m.role === "assistant"
     ? `<button class="msg-expand-btn" title="放大檢視">⛶</button>` : "";
+  const contentHtml = m.role === "assistant"
+    ? `<div class="content markdown-body">${renderMarkdown(m.content)}</div>`
+    : `<div class="content">${escapeHtml(m.content)}</div>`;
   div.innerHTML = `
     <div class="msg-header">
       <div class="role">${roleText}</div>
       ${expandBtnHtml}
     </div>
-    <div class="content">${escapeHtml(m.content)}</div>
+    ${contentHtml}
     ${metaHtml}
     ${actionsHtml}`;
   if (m.role === "assistant") {
