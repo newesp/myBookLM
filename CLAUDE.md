@@ -13,7 +13,7 @@
 python app.py   # http://127.0.0.1:8765
 ```
 
-On startup, any job with `status='running'` is reset to `'paused'` (lifespan handler in `backend/app.py`).
+On startup, any job with `status='running'` is reset to `'paused'` (lifespan handler in `backend/app.py`). Uvicorn runs with `reload=True` so backend edits take effect without a manual restart.
 
 ## Directory layers (three-layer model)
 
@@ -43,7 +43,7 @@ On startup, any job with `status='running'` is reset to `'paused'` (lifespan han
 
 **`backend/conversion.py`** — `slugify()` defined here (reuse it). `_running_tasks` dict. Chapter files are the checkpoint: if the file exists, the chapter is skipped on resume.
 
-**`backend/sources.py`** — `delete_source()` removes the filesystem directory plus DB chunks, source_topics rows, and source_pdf rows. `list_sources(resources_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned. **The wiki is never returned by `list_sources()`** — it is a separate layer. `link_source_pdf(slug, pdf_filename)` is idempotent (`ON CONFLICT DO UPDATE`); called by `conversion.py` and the embed route once the slug is final. `list_pdfs(books_dir, resources_dir)` annotates each PDF with `derived_sources` (skill/embedding rows pulled from `source_pdf`, with a `missing: true` flag for orphaned links).
+**`backend/sources.py`** — `delete_source(resources_dir, slug, kind=None)` supports partial deletion: `kind=None`/`"all"` removes the filesystem directory + DB chunks + source_topics + source_pdf rows; `kind="embedding"` drops only the chunks (keeps SKILL.md and topic/pdf links so the skill side survives); `kind="skill"` drops only the on-disk files (keeps chunks). The HTTP route is `DELETE /api/sources/{slug}?type=embedding|skill|all`. Frontend ⋮ menu shows the partial options only when the source has both types; otherwise just one "🗑 刪除" button. `list_sources(resources_dir, topic_id=None)` merges filesystem scan with a `GROUP BY source_slug` query on the chunks table; if `topic_id` is given (truthy), only sources whose `slug` is in `source_topics` for that topic are returned. **The wiki is never returned by `list_sources()`** — it is a separate layer. `link_source_pdf(slug, pdf_filename)` is idempotent (`ON CONFLICT DO UPDATE`); called by `conversion.py` and the embed route once the slug is final. `list_pdfs(books_dir, resources_dir)` annotates each PDF with `derived_sources` (skill/embedding rows pulled from `source_pdf`, with a `missing: true` flag for orphaned links).
 
 **`backend/topics.py`** — Topic CRUD + many-to-many `source_topics` membership. `default_topic_id()` returns the lowest-id topic (seeded as "預設" by `init_db`). `add_source_to_topic(slug, topic_id)` is idempotent (`INSERT OR IGNORE`); jobs call it after the slug is finalized so newly-converted sources land in the topic the user was in. `delete_topic()` refuses to delete the default and reassigns its conversations to the default.
 

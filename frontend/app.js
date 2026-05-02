@@ -667,10 +667,18 @@ function openSourceMenu(anchor, source) {
   const wrap = anchor.parentElement;
   const menu = document.createElement("div");
   menu.className = "source-menu-dropdown";
+  const types = source.types || [];
+  const hasBoth = types.includes("skill") && types.includes("embedding");
+  const deleteButtons = hasBoth
+    ? `
+      <button data-a="delete-embedding" class="danger">🗑 只刪 embedding</button>
+      <button data-a="delete-skill" class="danger">🗑 只刪 skill.md</button>
+      <button data-a="delete" class="danger">🗑 完全刪除</button>`
+    : `<button data-a="delete" class="danger">🗑 刪除</button>`;
   menu.innerHTML = `
     <button data-a="rename">✎ 重新命名</button>
     <button data-a="topics">🏷 主題分類…</button>
-    <button data-a="delete" class="danger">🗑 刪除</button>`;
+    ${deleteButtons}`;
   menu.addEventListener("click", (e) => e.stopPropagation());
   menu.querySelector("[data-a=rename]").addEventListener("click", async () => {
     closeSourceMenu();
@@ -687,6 +695,18 @@ function openSourceMenu(anchor, source) {
     closeSourceMenu();
     await openSourceTopicsDialog(source);
   });
+  const partialDelete = async (kind, label) => {
+    closeSourceMenu();
+    if (!confirm(`刪除「${source.name}」的 ${label}？\n（另一個來源類型會保留）`)) return;
+    try {
+      await api(`/sources/${source.slug}?type=${kind}`, { method: "DELETE" });
+      loadSources();
+    } catch (err) { alert("刪除失敗：" + err.message); }
+  };
+  const embBtn = menu.querySelector("[data-a=delete-embedding]");
+  if (embBtn) embBtn.addEventListener("click", () => partialDelete("embedding", "embedding 片段"));
+  const skillBtn = menu.querySelector("[data-a=delete-skill]");
+  if (skillBtn) skillBtn.addEventListener("click", () => partialDelete("skill", "skill.md 檔案"));
   menu.querySelector("[data-a=delete]").addEventListener("click", async () => {
     closeSourceMenu();
     if (!confirm(`刪除「${source.name}」？此動作無法復原。`)) return;

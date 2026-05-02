@@ -184,18 +184,29 @@ def rename_source(resources_dir: Path, slug: str, new_name: str) -> bool:
     return True
 
 
-def delete_source(resources_dir: Path, slug: str) -> bool:
+def delete_source(resources_dir: Path, slug: str, kind: str | None = None) -> bool:
+    """Delete a source. `kind` can be:
+    - None / "all" — full delete: directory + chunks + topic/pdf links (current default)
+    - "embedding" — drop chunks only, keep SKILL.md/chapters/META.json
+    - "skill" — drop the on-disk files only, keep DB chunks
+    Topic and source_pdf links are removed only on a full delete (still has
+    meaning when either layer survives).
+    """
     import shutil
     target = resources_dir / slug
     deleted_files = False
-    if target.exists() and target.is_dir():
-        shutil.rmtree(target, ignore_errors=True)
-        deleted_files = True
-    # Delete embedding chunks + topic memberships + source_pdf links from DB
+
+    if kind in (None, "all", "skill"):
+        if target.exists() and target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+            deleted_files = True
+
     with db.conn() as c:
-        c.execute("DELETE FROM chunks WHERE source_slug=?", (slug,))
-        c.execute("DELETE FROM source_topics WHERE source_slug=?", (slug,))
-        c.execute("DELETE FROM source_pdf WHERE slug=?", (slug,))
+        if kind in (None, "all", "embedding"):
+            c.execute("DELETE FROM chunks WHERE source_slug=?", (slug,))
+        if kind in (None, "all"):
+            c.execute("DELETE FROM source_topics WHERE source_slug=?", (slug,))
+            c.execute("DELETE FROM source_pdf WHERE slug=?", (slug,))
         c.commit()
     return deleted_files
 

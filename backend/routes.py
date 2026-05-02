@@ -58,11 +58,17 @@ def get_sources(request: Request, topic_id: int = 0):
 
 
 @router.delete("/sources/{slug}")
-def delete_source(slug: str, request: Request):
-    ok = sources.delete_source(request.app.state.resources_dir, slug)
-    if not ok:
-        # May have been embedding-only (no files) — still OK if chunks were deleted
-        pass
+def delete_source(slug: str, request: Request, type: str | None = None):
+    """Delete a source.
+
+    Query param `type`:
+    - omitted / "all" — full delete (files + chunks + topic/pdf links)
+    - "embedding" — drop chunks only, keep on-disk skill files
+    - "skill" — drop on-disk skill files only, keep chunks
+    """
+    if type not in (None, "all", "embedding", "skill"):
+        raise HTTPException(400, "type must be one of: all, embedding, skill")
+    sources.delete_source(request.app.state.resources_dir, slug, kind=type)
     return {"ok": True}
 
 
