@@ -3,15 +3,18 @@
 Strategy:
 - skill.md sources: inject full text (SKILL.md + chapter files) up to char limit.
 - embedding-only sources: embed user query via Ollama, retrieve top-k chunks.
+- LLM Wiki (slug `__wiki__` in selected_slugs): two-pass retrieval — Pass 1
+  picks pages from index.md, Pass 2 (this chat call) injects those pages
+  inside a configurable system-prompt block.
 """
 from pathlib import Path
 
-from . import db, llm
+from . import db, llm, wiki as wikimod
 from . import embedding as emb_mod
 
 
 async def build_source_context(
-    skills_dir: Path,
+    resources_dir: Path,
     selected_slugs: list[str],
     limit: int,
     user_message: str,
@@ -23,7 +26,7 @@ async def build_source_context(
     query_vec: list[float] | None = None  # lazily computed once
 
     for slug in selected_slugs:
-        source_dir = skills_dir / slug
+        source_dir = resources_dir / slug
         has_skill = source_dir.exists() and (source_dir / "SKILL.md").exists()
         has_emb = emb_mod.has_embedding(slug)
 
@@ -79,33 +82,64 @@ async def run_chat(
     conv_id: int,
     user_message: str,
     selected_slugs: list[str],
-    skills_dir: Path,
+    resources_dir: Path,
     cfg: dict,
+    wiki_dir: Path | None = None,
 ) -> dict:
     provider = cfg["active_provider"]
     pcfg = cfg["providers"][provider]
     ollama_cfg = cfg["providers"]["ollama"]
 
+    # Wiki sentinel — peel out before passing to source-context builder
+    use_wiki = wikimod.WIKI_SLUG_SENTINEL in selected_slugs
+    real_slugs = [s for s in selected_slugs if s != wikimod.WIKI_SLUG_SENTINEL]
+
     limit = int(pcfg.get("context_chars_limit") or 300_000)
     max_out = int(pcfg.get("max_output_tokens") or 4096)
     source_context, included = await build_source_context(
-        skills_dir, selected_slugs, limit, user_message, ollama_cfg
+        resources_dir, real_slugs, limit, user_message, ollama_cfg
     )
 
-    if source_context:
-        system_prompt = f"""You are an assistant answering questions based on the SOURCE materials provided below (retrieved via the user's selection).
+    # Build the wiki block (if requested and initialized)
+    wiki_block = ""
+    wiki_pages_used: list[str] = []
+    if use_wiki and wiki_dir is not None and wikimod.is_initialized(wiki_dir):
+        try:
+            picked = await wikimod.pick_pages(wiki_dir, user_message, cfg)
+            wiki_pages_used = picked.get("pages", [])
+            if wiki_pages_used:
+                wcfg = cfg.get("wiki") or {}
+                separator = wcfg.get("page_separator") or wikimod.DEFAULT_PAGE_SEPARATOR
+                template = wcfg.get("system_prompt_template") or wikimod.DEFAULT_SYSTEM_PROMPT_TEMPLATE
+                pages_text = wikimod.build_pages_block(wiki_dir, wiki_pages_used, separator)
+                wiki_block = wikimod.render_system_block(template, pages_text)
+        except Exception as e:
+            wiki_block = f"[Note: wiki retrieval failed: {type(e).__name__}: {e}]"
 
-Rules:
-- Ground your answer in the provided sources. If the sources do not contain the answer, say so explicitly rather than speculating.
-- You may cite sources by their slug (e.g., "according to `{included[0] if included else 'source'}`").
-- Answer in the same language as the user's question.
-- The prior conversation messages are also provided so you can maintain continuity.
-
-=== PROVIDED SOURCES ===
-
-{source_context}
-
-=== END SOURCES ==="""
+    if source_context or wiki_block:
+        body_parts: list[str] = []
+        if wiki_block:
+            body_parts.append(wiki_block)
+        if source_context:
+            body_parts.append(
+                "=== PROVIDED RAW SOURCES ===\n\n"
+                f"{source_context}\n\n=== END RAW SOURCES ==="
+            )
+        joined = "\n\n".join(body_parts)
+        cite_hint = (
+            f"according to `{included[0]}`" if included
+            else "citing the wiki page" if wiki_pages_used
+            else "according to the provided sources"
+        )
+        system_prompt = (
+            "You are an assistant answering questions based on the materials provided below.\n\n"
+            "Rules:\n"
+            "- Ground your answer in the provided materials. If they do not contain the answer, say so explicitly rather than speculating.\n"
+            f"- Cite specifics where useful (e.g., \"{cite_hint}\").\n"
+            "- Answer in the same language as the user's question.\n"
+            "- The prior conversation messages are also provided so you can maintain continuity.\n\n"
+            f"{joined}"
+        )
     else:
         system_prompt = (
             "You are a helpful assistant. No sources have been selected by the user. "
@@ -132,12 +166,15 @@ Rules:
             "VALUES (?, 'user', ?, ?)",
             (conv_id, user_message, db.now()),
         )
+        sources_used_record = list(included)
+        if wiki_pages_used:
+            sources_used_record.append(wikimod.WIKI_SLUG_SENTINEL)
         c.execute(
             "INSERT INTO messages (conversation_id, role, content, sources_used, "
             "tokens_in, tokens_out, cost, created_at) "
             "VALUES (?, 'assistant', ?, ?, ?, ?, ?, ?)",
             (
-                conv_id, result["content"], ",".join(included),
+                conv_id, result["content"], ",".join(sources_used_record),
                 result["tokens_in"], result["tokens_out"], cost, db.now(),
             ),
         )
@@ -153,4 +190,5 @@ Rules:
         "tokens_out": result["tokens_out"],
         "cost": cost,
         "sources_used": included,
+        "wiki_pages_used": wiki_pages_used,
     }

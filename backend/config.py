@@ -2,8 +2,14 @@ import json
 from pathlib import Path
 from copy import deepcopy
 
+from .wiki import DEFAULT_SYSTEM_PROMPT_TEMPLATE, DEFAULT_PAGE_SEPARATOR
+
 DEFAULT_CONFIG = {
     "active_provider": "ollama",
+    "wiki": {
+        "system_prompt_template": DEFAULT_SYSTEM_PROMPT_TEMPLATE,
+        "page_separator": DEFAULT_PAGE_SEPARATOR,
+    },
     "providers": {
         "claude": {
             "api_key": "",
@@ -46,6 +52,11 @@ def load_config(path: Path) -> dict:
         return deepcopy(DEFAULT_CONFIG)
     merged = deepcopy(DEFAULT_CONFIG)
     merged["active_provider"] = data.get("active_provider", merged["active_provider"])
+    # wiki block (deep-merge so users can override individual fields)
+    user_wiki = data.get("wiki") or {}
+    for k, v in user_wiki.items():
+        if k in merged["wiki"]:
+            merged["wiki"][k] = v
     existing = data.get("providers", {})
     for name, defaults in DEFAULT_CONFIG["providers"].items():
         cur = dict(defaults)

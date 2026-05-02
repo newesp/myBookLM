@@ -8,10 +8,11 @@ __pycache__/
 # App runtime data (DB, config with API keys)
 data/
 
-# User content — PDFs and generated sources
+# User content — PDFs, generated sources, and the LLM Wiki
 books/*
 !books/.gitkeep
-skills/
+resources/
+wiki/
 
 # Secrets
 .env

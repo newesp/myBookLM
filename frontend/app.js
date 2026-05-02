@@ -16,7 +16,13 @@ const state = {
   // 0 = "全部" (no filter); otherwise the active topic id used for filtering
   // sources/conversations and as the assignment target for new items.
   topicId: 0,
+  // LLM Wiki info — { exists, page_count, by_type, last_updated, ... } or null
+  wikiInfo: null,
 };
+
+// Sentinel slug used to mean "include the LLM Wiki" in selected sources.
+// Mirrors backend/wiki.py::WIKI_SLUG_SENTINEL.
+const WIKI_SLUG = "__wiki__";
 
 // Persist topic selection across reloads
 const SAVED_TOPIC_KEY = "myBookLM.topicId";
@@ -378,8 +384,170 @@ async function openSourceTopicsDialog(source) {
 // ---------- Sources ----------
 async function loadSources() {
   const q = state.topicId ? `?topic_id=${state.topicId}` : "";
-  state.sources = await api("/sources" + q);
+  const [srcs, wikiInfo] = await Promise.all([
+    api("/sources" + q),
+    api("/wiki/info").catch(() => null),
+  ]);
+  state.sources = srcs;
+  state.wikiInfo = wikiInfo;
   renderSources();
+}
+
+function fmtWikiTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (diffMin < 1) return "剛剛";
+  if (diffMin < 60) return `${diffMin} 分鐘前`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH} 小時前`;
+  return d.toLocaleDateString();
+}
+
+function renderWikiItem() {
+  const li = document.createElement("li");
+  li.className = "source-wiki";
+  const w = state.wikiInfo;
+  const checked = state.selected.has(WIKI_SLUG);
+  const exists = w && w.exists;
+  const meta = exists
+    ? `${w.page_count} 頁${w.last_updated ? " · " + fmtWikiTimestamp(w.last_updated) : ""}`
+    : "尚未建立 — 點 AI 訊息上的「📖 存入 Wiki」即可開始";
+  li.innerHTML = `
+    <input type="checkbox" ${checked ? "checked" : ""} ${exists ? "" : "disabled"}>
+    <div class="title-block">
+      <div class="title-name">📖 LLM Wiki</div>
+      <div class="meta"><span class="type-badge badge-wiki">wiki</span> ${escapeHtml(meta)}</div>
+    </div>
+    <div class="source-menu-wrap">
+      ${exists ? '<button class="source-menu-btn" title="檢視">⋮</button>' : ""}
+    </div>`;
+  const cb = li.querySelector("input");
+  cb.addEventListener("change", (e) => {
+    if (e.target.checked) state.selected.add(WIKI_SLUG);
+    else state.selected.delete(WIKI_SLUG);
+    updateSourcesCount();
+  });
+  if (exists) {
+    li.querySelector(".title-block").addEventListener("click", openWikiViewer);
+    li.querySelector(".title-block").style.cursor = "pointer";
+    const menu = li.querySelector(".source-menu-btn");
+    if (menu) menu.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openWikiViewer();
+    });
+  }
+  return li;
+}
+
+// Module-level cache for the wiki viewer session — set when the modal opens,
+// used to mark broken links and to detect stale ones without an extra fetch.
+let _wikiKnownPaths = new Set();
+
+async function openWikiViewer() {
+  let info, idx, pages;
+  try {
+    [info, idx, pages] = await Promise.all([
+      api("/wiki/info"),
+      api("/wiki/index"),
+      api("/wiki/pages"),
+    ]);
+  } catch (e) { alert("讀取 wiki 失敗：" + e.message); return; }
+  _wikiKnownPaths = new Set((pages.pages || []).map((p) => p.path));
+  $("#modal-title-text").textContent = "📖 LLM Wiki";
+  $("#modal-tabs").innerHTML = "";
+  const body = $("#modal-body");
+  const counts = info.by_type || {};
+  const countLine = ["concept", "entity", "summary", "compare", "synthesis"]
+    .map((t) => `${t}: ${counts[t] || 0}`).join(" · ");
+  body.innerHTML = `
+    <div class="wiki-viewer">
+      <div class="wiki-viewer-meta">
+        共 ${info.page_count} 頁 · ${escapeHtml(countLine)}
+        ${info.last_updated ? "<br>最後更新：" + escapeHtml(info.last_updated) : ""}
+      </div>
+      <div class="wiki-viewer-content"></div>
+    </div>`;
+  renderWikiIndexInto(body.querySelector(".wiki-viewer-content"), idx.content || "");
+  $("#source-modal").hidden = false;
+}
+
+function renderWikiIndexInto(container, indexMd) {
+  container.classList.add("wiki-index-md");
+  container.classList.remove("wiki-page-md");
+  container.innerHTML = marked.parse(indexMd);
+  hookWikiLinks(container);
+}
+
+async function renderWikiPageInto(container, path) {
+  const renderBack = () => {
+    container.querySelector(".wiki-back-btn")?.addEventListener("click", async () => {
+      const idx = await api("/wiki/index").catch(() => ({ content: "" }));
+      renderWikiIndexInto(container, idx.content || "");
+    });
+  };
+  let r;
+  try {
+    r = await api(`/wiki/page?path=${encodeURIComponent(path)}`);
+  } catch (e) {
+    // Render a friendly broken-link notice in-place instead of alert().
+    container.classList.remove("wiki-index-md");
+    container.classList.add("wiki-page-md");
+    const isMissing = /^404/.test(e.message || "");
+    container.innerHTML = `
+      <button class="wiki-back-btn">← 回 Index</button>
+      <div class="wiki-page-path">${escapeHtml(path)}</div>
+      <div class="wiki-broken-link">
+        ${isMissing
+          ? `⚠ 此頁面不存在 — 多半是 LLM 寫了一個沒對應到實體頁的連結（broken link）。<br>
+             之後 Phase 2 的 lint 操作會自動偵測這類問題。`
+          : `讀取頁面失敗：${escapeHtml(e.message || "unknown")}`}
+      </div>`;
+    renderBack();
+    return;
+  }
+  container.classList.remove("wiki-index-md");
+  container.classList.add("wiki-page-md");
+  container.innerHTML = `
+    <button class="wiki-back-btn">← 回 Index</button>
+    <div class="wiki-page-path">${escapeHtml(path)}</div>
+    <div class="wiki-page-body">${marked.parse(r.content || "")}</div>`;
+  renderBack();
+  hookWikiLinks(container, path);
+}
+
+// Intercept relative .md links inside the wiki viewer and route them through
+// the API instead of letting the browser navigate to a non-existent path.
+// `currentPath` lets us resolve links that are relative to a sub-page.
+function hookWikiLinks(container, currentPath = "") {
+  const baseDir = currentPath.includes("/")
+    ? currentPath.slice(0, currentPath.lastIndexOf("/") + 1)
+    : "";
+  container.querySelectorAll("a[href]").forEach((a) => {
+    const href = a.getAttribute("href");
+    if (!href || href.startsWith("http://") || href.startsWith("https://") || href.startsWith("#")) return;
+    if (!href.endsWith(".md")) return;
+    const parts = (baseDir + href).split("/");
+    const stack = [];
+    for (const p of parts) {
+      if (!p || p === ".") continue;
+      if (p === "..") stack.pop();
+      else stack.push(p);
+    }
+    const resolved = stack.join("/");
+    // If we know the page doesn't exist, mark the link visually so the user
+    // can spot stale links before clicking. Click still works (renders the
+    // friendly broken-link notice).
+    if (_wikiKnownPaths.size && !_wikiKnownPaths.has(resolved)) {
+      a.classList.add("wiki-link-broken");
+      a.title = "broken link: " + resolved;
+    }
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      renderWikiPageInto(container, resolved);
+    });
+  });
 }
 
 function sourceTypeBadge(types) {
@@ -395,8 +563,17 @@ function sourceTypeBadge(types) {
 function renderSources() {
   const list = $("#source-list");
   list.innerHTML = "";
+  // Wiki entry — always at top, regardless of filter / topic / source count.
+  if (state.wikiInfo) {
+    list.appendChild(renderWikiItem());
+  }
   if (state.sources.length === 0) {
-    list.innerHTML = '<li style="color:#999;padding:20px 6px;font-size:12px;">尚無來源。點「新增來源」或切到「轉換」頁面建立。</li>';
+    const empty = document.createElement("li");
+    empty.style = "color:#999;padding:20px 6px;font-size:12px;";
+    empty.textContent = state.wikiInfo
+      ? "尚無一般來源。點「新增來源」或切到「轉換」頁面建立。"
+      : "尚無來源。點「新增來源」或切到「轉換」頁面建立。";
+    list.appendChild(empty);
     updateSourcesCount();
     return;
   }
@@ -410,7 +587,10 @@ function renderSources() {
     ? sorted.filter((s) => (s.name || "").toLowerCase().includes(q) || (s.slug || "").toLowerCase().includes(q))
     : sorted;
   if (filtered.length === 0) {
-    list.innerHTML = `<li style="color:#999;padding:20px 6px;font-size:12px;">沒有符合「${escapeHtml(q)}」的來源。</li>`;
+    const empty = document.createElement("li");
+    empty.style = "color:#999;padding:20px 6px;font-size:12px;";
+    empty.textContent = `沒有符合「${q}」的來源。`;
+    list.appendChild(empty);
     updateSourcesCount();
     syncSelectAll();
     return;
@@ -749,6 +929,7 @@ function appendMessage(m, updateCounter = true) {
   const metaHtml = parts.length ? `<div class="meta">${escapeHtml(parts.join(" · "))}</div>` : "";
   const actionsHtml = m.role === "assistant"
     ? `<div class="msg-actions">
+         <button class="save-wiki-btn" title="將此問答整合進 LLM Wiki">📖 存入 Wiki</button>
          <button class="save-source-btn">💾 存為來源</button>
          <button class="copy-btn">📋 複製</button>
        </div>` : "";
@@ -765,6 +946,7 @@ function appendMessage(m, updateCounter = true) {
   if (m.role === "assistant") {
     const content = m.content;
     div.querySelector(".save-source-btn").addEventListener("click", () => saveAsSource(content));
+    div.querySelector(".save-wiki-btn").addEventListener("click", (e) => saveToWiki(div, content, e.currentTarget));
     const copyBtn = div.querySelector(".copy-btn");
     copyBtn.addEventListener("click", async () => {
       try {
@@ -798,6 +980,39 @@ function updateSessionDisplay() {
   const t = state.sessionTokens;
   $("#usage-info").textContent =
     `目前對話：${t.in} in / ${t.out} out · 累計 $${t.cost.toFixed(4)}`;
+}
+
+async function saveToWiki(msgDiv, answer, btn) {
+  // Walk back through siblings to find the most recent user message.
+  let prev = msgDiv.previousElementSibling;
+  while (prev && !prev.classList.contains("user")) {
+    prev = prev.previousElementSibling;
+  }
+  if (!prev) { alert("找不到對應的問題"); return; }
+  const question = prev.querySelector(".content")?.textContent || "";
+  if (!question.trim()) { alert("找不到對應的問題"); return; }
+  if (!confirm("將這段問答整合進 LLM Wiki？\n（會花費數次 LLM 呼叫，視 wiki 規模而定）")) return;
+  const orig = btn.textContent;
+  btn.textContent = "整合中…";
+  btn.disabled = true;
+  try {
+    const r = await api("/wiki/ingest/qa", {
+      method: "POST",
+      body: { question, answer },
+    });
+    const ops = r.operations || [];
+    const summary = ops.length
+      ? ops.map((o) => `${o.action} ${o.path}`).join(", ")
+      : "(無操作)";
+    btn.textContent = `✓ ${ops.length} 個操作`;
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2500);
+    loadSources(); // refresh wiki info banner
+    console.log("[wiki ingest]", summary);
+  } catch (e) {
+    btn.textContent = orig;
+    btn.disabled = false;
+    alert("Wiki 整合失敗：" + e.message);
+  }
 }
 
 async function saveAsSource(content) {
@@ -1152,9 +1367,14 @@ async function loadConfig() {
       input.value = val ?? "";
     });
   });
+  // Wiki block
+  const wcfg = state.config.wiki || {};
+  $$("[data-w]").forEach((input) => {
+    input.value = wcfg[input.dataset.w] ?? "";
+  });
 }
 $("#save-settings").addEventListener("click", async () => {
-  const payload = { active_provider: $("#active-provider").value, providers: {} };
+  const payload = { active_provider: $("#active-provider").value, providers: {}, wiki: {} };
   ["claude", "gemini", "grok", "ollama"].forEach((name) => {
     const obj = {};
     $$(`[data-p="${name}"]`).forEach((input) => {
@@ -1170,6 +1390,9 @@ $("#save-settings").addEventListener("click", async () => {
       }
     });
     payload.providers[name] = obj;
+  });
+  $$("[data-w]").forEach((input) => {
+    payload.wiki[input.dataset.w] = input.value;
   });
   try {
     await api("/config", { method: "POST", body: payload });

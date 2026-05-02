@@ -7,6 +7,7 @@ A local alternative to NotebookLM. Convert PDFs into conversational knowledge so
 - **PDF → Skill.md**: Use an LLM to rewrite a PDF as structured chapter knowledge files (slow, high quality, great for deep reading)
 - **PDF → Embedding**: Vectorize PDF text directly for similarity-based retrieval at query time (fast, 30–90 seconds, preserves original text)
 - **Hybrid RAG chat**: Select sources in the left panel; chat uses full-text injection for skill.md sources and top-k retrieval for embedding sources
+- **LLM Wiki**: An LLM-managed knowledge layer (concept / entity / summary / compare / synthesis pages) sitting on top of raw resources. Click 📖 存入 Wiki on any AI reply to file the Q&A back as wiki pages; check the pinned wiki entry in the source list to query it. No embeddings — the LLM navigates by reading `index.md` and following links. Powered by the [llm-wiki skill](backend/skills/llm-wiki/) which is portable to other projects.
 - **Save as source**: Save any AI reply as a new mini skill.md source
 - **Topics**: Group sources by topic — pick a topic in the sidebar to scope the source list and conversation history; sources can belong to multiple topics
 - **Multiple AI providers**: Claude / Gemini / Grok / Ollama (local) — switchable at any time
@@ -47,21 +48,25 @@ myBookLM/
 ├── backend/
 │   ├── app.py          # FastAPI app factory
 │   ├── routes.py       # REST API endpoints
-│   ├── chat.py         # RAG logic (skill.md full-text + embedding top-k)
+│   ├── chat.py         # RAG logic (skill.md full-text + embedding top-k + wiki two-pass)
 │   ├── conversion.py   # PDF → skill.md pipeline (multi-step LLM)
 │   ├── embedding.py    # PDF → embedding (Ollama nomic-embed-text)
 │   ├── llm.py          # Unified LLM interface (4 providers)
 │   ├── sources.py      # Source listing and deletion (clears DB chunks too)
 │   ├── topics.py       # Topic CRUD + many-to-many source membership
+│   ├── wiki.py         # LLM Wiki: ingest (Plan+Apply), Pass 1 page picking, info
 │   ├── pdf_utils.py    # PDF text extraction (pypdf)
 │   ├── config.py       # Config read/write (data/config.json)
-│   └── db.py           # SQLite schema (jobs / conversations / messages / chunks)
+│   ├── db.py           # SQLite schema (jobs / conversations / messages / chunks)
+│   └── skills/
+│       └── llm-wiki/   # Vendored skill: prompts, reference docs, page templates
 ├── frontend/
 │   ├── index.html
 │   ├── styles.css
 │   └── app.js
 ├── books/              # Place PDF files here (excluded from git)
-├── skills/             # Generated sources (excluded from git)
+├── resources/          # Generated sources from PDFs (excluded from git)
+├── wiki/               # LLM-managed wiki (excluded from git, lazy-init on first ingest)
 └── data/               # SQLite DB + config.json (excluded from git)
 ```
 
@@ -119,6 +124,41 @@ Fill in API keys, select models, and adjust context limits in the Settings tab. 
 | skill.md | Full text of SKILL.md + all chapter files injected into system prompt (up to the configured char limit) |
 | Embedding only | Query is embedded at request time → top-8 most similar chunks injected |
 | Both | skill.md full-text injection takes priority |
+| LLM Wiki (when checked) | Pass 1: model reads `index.md` and picks relevant pages. Pass 2: those page bodies are injected inside a configurable system-prompt block (Settings → LLM Wiki). Small wikis (under ~2k tokens) skip Pass 1 and dump everything. |
+
+## LLM Wiki
+
+The wiki layer is an LLM-managed, concept-organized rewrite of your raw resources, modeled after [Karpathy's LLM Wiki sketch](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). It lives in `wiki/` and is created on first `📖 存入 Wiki` click.
+
+**Layout** (auto-created from `backend/skills/llm-wiki/templates/`):
+
+```
+wiki/
+├── SKILL.md     # the wiki's own maintenance manual (schema + workflows)
+├── index.md     # auto-regenerated catalog of all pages
+├── log.md       # append-only operation log
+├── concept/     # concept pages
+├── entity/      # named entities
+├── summary/     # one page per ingested raw source (slug = source slug)
+├── compare/     # comparison pages
+└── synthesis/   # narrative cross-cutting summaries
+```
+
+**Wiki API** (all under `/api`):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/wiki/info` | Page count, by-type breakdown, last-updated, schema_version |
+| GET | `/wiki/pages` | List all pages with title and description |
+| GET | `/wiki/page?path=...` | Read one page (path must be `<type>/<slug>.md`) |
+| GET | `/wiki/index` | Raw `index.md` content |
+| GET | `/wiki/log` | Raw `log.md` content |
+| POST | `/wiki/init` | Manually scaffold the wiki (otherwise auto-init on first ingest) |
+| POST | `/wiki/ingest/qa` | `{question, answer}` → run Plan + Apply, regen index, append log |
+
+**Cost note**: Each `📖 存入 Wiki` typically runs 1 Plan call + 2–4 Apply calls (one per page). Use a cheaper model in Settings if budget-sensitive — the Plan/Apply prompts are language-neutral and work with all four providers.
+
+**Reusing the skill**: `backend/skills/llm-wiki/` is a vendored copy of `~/.claude/skills/llm-wiki/`. It contains `SKILL.md`, reference docs, prompt templates, and starter file templates — language-neutral, so any project can vendor it and write its own runtime against the same prompts.
 
 ## Known limitations
 

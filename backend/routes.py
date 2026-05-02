@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
-from . import db, config as cfgmod, sources, conversion, chat as chatmod, embedding as embmod, topics as topicmod
+from . import db, config as cfgmod, sources, conversion, chat as chatmod, embedding as embmod, topics as topicmod, wiki as wikimod
 
 router = APIRouter()
 
@@ -18,6 +18,7 @@ router = APIRouter()
 class ConfigUpdate(BaseModel):
     active_provider: Optional[str] = None
     providers: Optional[dict] = None
+    wiki: Optional[dict] = None
 
 
 @router.get("/config")
@@ -40,6 +41,10 @@ def update_config(body: ConfigUpdate, request: Request):
                     cfg["providers"][name]["pricing"].update(v)
                 else:
                     cfg["providers"][name][k] = v
+    if body.wiki:
+        cfg.setdefault("wiki", {})
+        for k, v in body.wiki.items():
+            cfg["wiki"][k] = v
     cfgmod.save_config(request.app.state.config_path, cfg)
     return cfg
 
@@ -49,12 +54,12 @@ def update_config(body: ConfigUpdate, request: Request):
 @router.get("/sources")
 def get_sources(request: Request, topic_id: int = 0):
     tid = topic_id if topic_id and topic_id > 0 else None
-    return sources.list_sources(request.app.state.skills_dir, topic_id=tid)
+    return sources.list_sources(request.app.state.resources_dir, topic_id=tid)
 
 
 @router.delete("/sources/{slug}")
 def delete_source(slug: str, request: Request):
-    ok = sources.delete_source(request.app.state.skills_dir, slug)
+    ok = sources.delete_source(request.app.state.resources_dir, slug)
     if not ok:
         # May have been embedding-only (no files) — still OK if chunks were deleted
         pass
@@ -63,7 +68,7 @@ def delete_source(slug: str, request: Request):
 
 @router.get("/sources/{slug}/content")
 def get_source_content(slug: str, request: Request):
-    return sources.get_source_content(request.app.state.skills_dir, slug)
+    return sources.get_source_content(request.app.state.resources_dir, slug)
 
 
 class RenameSource(BaseModel):
@@ -75,7 +80,7 @@ def rename_source(slug: str, body: RenameSource, request: Request):
     new_name = body.name.strip()
     if not new_name:
         raise HTTPException(400, "Name cannot be empty")
-    sources.rename_source(request.app.state.skills_dir, slug, new_name)
+    sources.rename_source(request.app.state.resources_dir, slug, new_name)
     return {"ok": True, "slug": slug, "name": new_name}
 
 
@@ -92,7 +97,7 @@ def save_from_response(body: SaveAsSourceBody, request: Request):
     raw = re.sub(r"-+", "-", raw)[:40] or "note"
     slug = f"note-{raw}-{int(time.time()) % 1_000_000}"
 
-    skill_dir = request.app.state.skills_dir / slug
+    skill_dir = request.app.state.resources_dir / slug
     skill_dir.mkdir(parents=True, exist_ok=True)
 
     skill_md = f"""---
@@ -181,7 +186,7 @@ def put_topic_sources(topic_id: int, body: SetTopicSources):
 def get_pdfs(request: Request):
     return sources.list_pdfs(
         request.app.state.books_dir,
-        request.app.state.skills_dir,
+        request.app.state.resources_dir,
     )
 
 
@@ -232,7 +237,7 @@ async def create_job(body: StartJob, request: Request):
         job_id = cur.lastrowid
         c.commit()
     paths = {
-        "skills_dir": str(request.app.state.skills_dir),
+        "resources_dir": str(request.app.state.resources_dir),
         "books_dir": str(request.app.state.books_dir),
     }
     await conversion.start_job(job_id, paths, cfg)
@@ -248,7 +253,7 @@ async def create_embed_job(body: StartJob, request: Request):
     ollama_cfg = cfg["providers"]["ollama"]
 
     slug = embmod.slugify_pdf(pdf_path.stem)
-    skill_dir = request.app.state.skills_dir / slug
+    skill_dir = request.app.state.resources_dir / slug
     skill_dir.mkdir(parents=True, exist_ok=True)
 
     # Write META.json so the source appears in the list even without SKILL.md
@@ -321,7 +326,7 @@ async def resume_job(job_id: int, request: Request):
             )
             c.commit()
         paths = {
-            "skills_dir": str(request.app.state.skills_dir),
+            "resources_dir": str(request.app.state.resources_dir),
             "books_dir": str(request.app.state.books_dir),
         }
         await conversion.start_job(job_id, paths, cfg)
@@ -446,6 +451,73 @@ def clear_conv(cid: int):
     return {"ok": True}
 
 
+# ---------- Wiki ----------
+
+@router.get("/wiki/info")
+def wiki_info(request: Request):
+    return wikimod.get_info(request.app.state.wiki_dir)
+
+
+@router.get("/wiki/pages")
+def wiki_pages(request: Request):
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        return {"pages": []}
+    return {"pages": wikimod.list_pages(wiki_dir)}
+
+
+@router.get("/wiki/page")
+def wiki_get_page(request: Request, path: str):
+    wiki_dir = request.app.state.wiki_dir
+    try:
+        content = wikimod.read_page(wiki_dir, path)
+    except ValueError:
+        raise HTTPException(400, f"Invalid wiki path: {path}")
+    except FileNotFoundError:
+        # Don't leak the full filesystem path in the message.
+        raise HTTPException(404, f"Wiki page not found: {path}")
+    return {"path": path, "content": content}
+
+
+@router.get("/wiki/index")
+def wiki_index(request: Request):
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        return {"content": ""}
+    return {"content": (wiki_dir / "index.md").read_text(encoding="utf-8")}
+
+
+@router.get("/wiki/log")
+def wiki_log(request: Request):
+    wiki_dir = request.app.state.wiki_dir
+    log = wiki_dir / "log.md"
+    if not log.exists():
+        return {"content": ""}
+    return {"content": log.read_text(encoding="utf-8")}
+
+
+@router.post("/wiki/init")
+def wiki_init(request: Request):
+    wikimod.initialize(request.app.state.wiki_dir)
+    return {"ok": True}
+
+
+class WikiIngestQA(BaseModel):
+    question: str
+    answer: str
+
+
+@router.post("/wiki/ingest/qa")
+async def wiki_ingest_qa(body: WikiIngestQA, request: Request):
+    cfg = cfgmod.load_config(request.app.state.config_path)
+    try:
+        return await wikimod.ingest_qa(
+            request.app.state.wiki_dir, body.question, body.answer, cfg
+        )
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
 # ---------- Chat ----------
 
 class ChatRequest(BaseModel):
@@ -460,7 +532,8 @@ async def send_chat(body: ChatRequest, request: Request):
     try:
         return await chatmod.run_chat(
             body.conversation_id, body.message, body.sources,
-            request.app.state.skills_dir, cfg,
+            request.app.state.resources_dir, cfg,
+            wiki_dir=request.app.state.wiki_dir,
         )
     except Exception as e:
         raise HTTPException(500, f"{type(e).__name__}: {e}")

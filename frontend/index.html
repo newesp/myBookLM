@@ -155,6 +155,17 @@
           <p class="hint">Ollama 不需 API key，只要本機有安裝並已 pull 對應模型。</p>
         </fieldset>
 
+        <fieldset>
+          <legend>LLM Wiki</legend>
+          <p class="hint">Wiki 被勾選時，這個模板會作為 system prompt 的開頭區塊。<code>{{wiki_content}}</code> 會被替換成檢索到的 wiki 頁面內容。</p>
+          <label>System prompt 模板
+            <textarea data-w="system_prompt_template" rows="6" style="width:100%;font-family:inherit;font-size:13px;"></textarea>
+          </label>
+          <label>頁面分隔符（多頁串接時的分隔）
+            <input type="text" data-w="page_separator">
+          </label>
+        </fieldset>
+
         <div class="save-row">
           <button id="save-settings">儲存設定</button>
           <span id="settings-msg"></span>

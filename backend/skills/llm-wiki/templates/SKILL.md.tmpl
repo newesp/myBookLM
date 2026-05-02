@@ -1,0 +1,106 @@
+---
+name: LLM Wiki
+description: An LLM-managed knowledge layer over the project's raw sources.
+schema_version: "1.0"
+---
+
+# LLM Wiki
+
+This is a wiki maintained by an LLM following the
+[llm-wiki skill](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+pattern. It re-organizes knowledge from the project's raw sources by **concept**
+rather than by source, with cross-linked pages and an append-only operation log.
+
+## Layout
+
+```
+wiki/
+├── SKILL.md     ← you are here (the wiki's maintenance manual)
+├── index.md     ← catalog of all pages
+├── log.md       ← append-only operation log
+├── concept/     ← concept pages
+├── entity/      ← named entities
+├── summary/     ← one page per ingested raw source
+├── compare/     ← comparison pages
+└── synthesis/   ← narrative cross-cutting summaries
+```
+
+## Schema (rules for the LLM)
+
+### Page types
+
+- **concept** — an idea, mechanism, or pattern (e.g. `attention.md`)
+- **entity** — a named thing: model, person, dataset, system (e.g. `transformer.md`)
+- **summary** — one per raw source; filename matches the source slug
+- **compare** — two-or-more-way comparison (e.g. `attention-vs-rnn.md`)
+- **synthesis** — narrative spanning many pages (e.g. `overview.md`)
+
+A page's type is fixed once chosen.
+
+### Filenames
+
+- ASCII, lowercase, kebab-case
+- Singular nouns where possible
+- No type prefix in the filename — the directory encodes it
+- The H1 inside the file may be in any language
+
+### Page structure (required)
+
+```markdown
+# <Display Title>
+
+> **Type:** concept | entity | summary | compare | synthesis
+> **Aliases:** alt-1, alt-2  (optional)
+> **Related:** [Other](../entity/other.md)
+
+## <First section>
+
+...prose...
+
+## Sources
+
+- [<source-slug>](../summary/<source-slug>.md) — page X
+```
+
+### Cross-references
+
+Standard relative markdown links. Every link target must exist.
+
+### index.md
+
+One section per page type, alphabetical within each section. Each entry is
+one line: link + 8-15 word description. Regenerated on every ingest.
+
+### log.md
+
+Append-only. ISO-8601 timestamp prefix. Operation prefixes: `ingest`, `lint`, `query`.
+
+## Workflows
+
+### Ingest
+
+Two passes:
+1. **Plan** — given new content + index, decide which pages to create/update
+2. **Apply** — for each operation, write or rewrite the full page
+
+Then regenerate `index.md` and append to `log.md`.
+
+### Query
+
+Two passes:
+1. **Pick pages** — given the question + index, choose which pages to read
+2. **Answer** — read those pages and answer the question
+
+Small wikis (under ~2000 tokens) can skip Pass 1 and dump all pages.
+
+### Lint
+
+Reports contradictions, stale claims, orphan pages, broken links, duplicates,
+and misclassified pages. Does not auto-fix.
+
+## You can edit this file
+
+This SKILL.md is the wiki's own maintenance manual. The LLM reads it on
+every operation. Edit the rules above to adjust conventions for **this**
+specific wiki — the changes take effect immediately and travel with the
+wiki directory.

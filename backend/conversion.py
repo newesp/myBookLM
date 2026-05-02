@@ -74,7 +74,7 @@ async def _run_job(job_id: int, paths: dict, cfg: dict) -> None:
             return
         provider = row["provider"]
         pcfg = cfg["providers"][provider]
-        skills_dir = Path(paths["skills_dir"])
+        resources_dir = Path(paths["resources_dir"])
         pdf_path = Path(row["pdf_path"])
 
         _update(job_id, status="running", current_step="extracting_pdf", error=None)
@@ -101,7 +101,7 @@ async def _run_job(job_id: int, paths: dict, cfg: dict) -> None:
             # sanitize slugs
             for i, ch in enumerate(chapters):
                 ch["slug"] = slugify(ch.get("slug") or ch.get("title", f"ch-{i+1}"))
-            skill_dir = skills_dir / book_slug
+            skill_dir = resources_dir / book_slug
             skill_dir.mkdir(parents=True, exist_ok=True)
             (skill_dir / "chapters").mkdir(exist_ok=True)
             chapters_json = json.dumps(

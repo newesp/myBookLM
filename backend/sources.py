@@ -5,7 +5,7 @@ from pathlib import Path
 from . import db
 
 
-def list_sources(skills_dir: Path, topic_id: int | None = None) -> list[dict]:
+def list_sources(resources_dir: Path, topic_id: int | None = None) -> list[dict]:
     """List sources, optionally filtered to those belonging to a topic.
 
     topic_id=None or 0 means no filter (all sources).
@@ -21,8 +21,8 @@ def list_sources(skills_dir: Path, topic_id: int | None = None) -> list[dict]:
 
     out: dict[str, dict] = {}
 
-    if skills_dir.exists():
-        for sub in sorted(skills_dir.iterdir()):
+    if resources_dir.exists():
+        for sub in sorted(resources_dir.iterdir()):
             if not sub.is_dir():
                 continue
             slug = sub.name
@@ -96,14 +96,14 @@ def _parse_frontmatter(path: Path) -> dict:
     return info
 
 
-def get_source_content(skills_dir: Path, slug: str) -> dict:
+def get_source_content(resources_dir: Path, slug: str) -> dict:
     """Return full content for viewer.
     - skill: main SKILL.md + list of chapters {filename, title, content}
     - embedding: all chunks with idx + text
     Either/both can be present depending on source types.
     """
     result: dict = {"slug": slug, "name": slug, "types": [], "skill": None, "embedding": None}
-    sub = skills_dir / slug
+    sub = resources_dir / slug
     if sub.exists() and sub.is_dir():
         skill_md = sub / "SKILL.md"
         if skill_md.exists():
@@ -149,9 +149,9 @@ def get_source_content(skills_dir: Path, slug: str) -> dict:
     return result
 
 
-def rename_source(skills_dir: Path, slug: str, new_name: str) -> bool:
+def rename_source(resources_dir: Path, slug: str, new_name: str) -> bool:
     """Update the display name. Slug/directory is NOT changed (it's the primary key)."""
-    sub = skills_dir / slug
+    sub = resources_dir / slug
     if not sub.exists() or not sub.is_dir():
         # Embedding-only with no directory: store name in META.json in the skills dir
         sub.mkdir(parents=True, exist_ok=True)
@@ -184,9 +184,9 @@ def rename_source(skills_dir: Path, slug: str, new_name: str) -> bool:
     return True
 
 
-def delete_source(skills_dir: Path, slug: str) -> bool:
+def delete_source(resources_dir: Path, slug: str) -> bool:
     import shutil
-    target = skills_dir / slug
+    target = resources_dir / slug
     deleted_files = False
     if target.exists() and target.is_dir():
         shutil.rmtree(target, ignore_errors=True)
@@ -217,7 +217,7 @@ def link_source_pdf(slug: str, pdf_filename: str) -> None:
         c.commit()
 
 
-def list_pdfs(books_dir: Path, skills_dir: Path) -> list[dict]:
+def list_pdfs(books_dir: Path, resources_dir: Path) -> list[dict]:
     """List PDFs in books/, each annotated with its derived sources.
 
     A "derived source" is a row in source_pdf whose pdf_filename matches.
@@ -231,7 +231,7 @@ def list_pdfs(books_dir: Path, skills_dir: Path) -> list[dict]:
 
     # Build a slug → metadata map of *currently existing* sources, then
     # cross-reference with source_pdf to assign them under each PDF.
-    existing = {s["slug"]: s for s in list_sources(skills_dir)}
+    existing = {s["slug"]: s for s in list_sources(resources_dir)}
 
     with db.conn() as c:
         link_rows = c.execute(

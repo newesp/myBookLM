@@ -9,13 +9,14 @@ from . import db, routes
 
 def create_app(root: Path) -> FastAPI:
     books_dir = root / "books"
-    skills_dir = root / "skills"
+    resources_dir = root / "resources"
+    wiki_dir = root / "wiki"
     data_dir = root / "data"
     frontend_dir = root / "frontend"
     config_path = data_dir / "config.json"
     db_path = data_dir / "app.db"
 
-    for d in (books_dir, skills_dir, data_dir):
+    for d in (books_dir, resources_dir, data_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
@@ -31,7 +32,8 @@ def create_app(root: Path) -> FastAPI:
 
     app.state.root = root
     app.state.books_dir = books_dir
-    app.state.skills_dir = skills_dir
+    app.state.resources_dir = resources_dir
+    app.state.wiki_dir = wiki_dir
     app.state.data_dir = data_dir
     app.state.config_path = config_path
     app.state.db_path = db_path
