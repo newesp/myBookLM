@@ -576,6 +576,43 @@ async def wiki_repair_orphan(body: WikiRepairOrphan, request: Request):
         raise HTTPException(500, f"{type(e).__name__}: {e}")
 
 
+class WikiRepairDiscuss(BaseModel):
+    issue: dict
+
+
+@router.post("/wiki/repair/discuss")
+def wiki_repair_discuss(body: WikiRepairDiscuss, request: Request):
+    """Create a new conversation seeded for discussing a lint issue
+    (typically `contradiction`). The actual two-page wiki content is
+    delivered by the regular wiki two-pass retrieval when the user sends
+    the first message — we just create the conv + return seed text.
+    """
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    try:
+        seed = wikimod.build_contradiction_seed(wiki_dir, body.issue)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    tid = topicmod.default_topic_id()
+    with db.conn() as c:
+        cur = c.execute(
+            "INSERT INTO conversations (title, topic_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (seed["title"], tid, db.now(), db.now()),
+        )
+        cid = cur.lastrowid
+        c.commit()
+    return {
+        "conversation_id": cid,
+        "topic_id": tid,
+        "title": seed["title"],
+        "seed_message": seed["seed_message"],
+        "pages": seed["pages"],
+    }
+
+
 @router.post("/wiki/migrate/sources-plaintext")
 def wiki_migrate_sources_plaintext(request: Request):
     """One-shot migration: convert every page's `## Sources` markdown-link

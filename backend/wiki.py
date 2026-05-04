@@ -685,6 +685,88 @@ def _relative_link_from(from_path: str, to_path: str) -> str:
     return "../" + to_path
 
 
+# ---------- Contradiction discussion seed ----------
+
+def _detect_other_page_in_text(
+    wiki_dir: Path, exclude: str, text: str
+) -> str | None:
+    """Scan `text` for a `<type>/<slug>.md` reference that exists on disk and
+    differs from `exclude`. Used to enrich the contradiction-discuss seed
+    when the LLM lint detail mentions a second page.
+    """
+    if not text:
+        return None
+    pattern = re.compile(
+        r"\b((?:concept|entity|summary|compare|synthesis)/[a-z0-9_\-]+\.md)\b",
+        re.IGNORECASE,
+    )
+    for m in pattern.findall(text):
+        if m == exclude:
+            continue
+        try:
+            p = _safe_rel_path(m)
+        except ValueError:
+            continue
+        if (wiki_dir / p).exists():
+            return m
+    return None
+
+
+def build_contradiction_seed(wiki_dir: Path, issue: dict) -> dict:
+    """Compose a seed user message for the discuss-contradiction conversation.
+
+    Returns `{title, seed_message, pages}`. The frontend pre-fills
+    `seed_message` into the chat input — the user reviews and clicks send,
+    so the wiki two-pass retrieval delivers the actual page content during
+    the chat turn (we don't paste full pages here).
+    """
+    issue = issue or {}
+    page = (issue.get("page") or "").strip()
+    detail = (issue.get("detail") or "").strip()
+    suggested_fix = (issue.get("suggested_fix") or "").strip()
+    category = (issue.get("category") or "contradiction").strip()
+
+    # Try to spot a second page in the lint text — purely best-effort.
+    other = _detect_other_page_in_text(
+        wiki_dir, page, f"{detail}\n{suggested_fix}"
+    )
+
+    page_basename = Path(page).stem if page else "?"
+    if other:
+        title = f"釐清矛盾：{page_basename} ↔ {Path(other).stem}"
+    else:
+        title = f"釐清矛盾：{page_basename}"
+    title = title[:80]
+
+    parts: list[str] = [
+        "我想透過討論釐清 LLM lint 找到的一個問題。",
+        "",
+        f"**類別**：`{category}`",
+    ]
+    if page:
+        parts.append(f"**主要頁**：`{page}`")
+    if other:
+        parts.append(f"**對照頁**：`{other}`")
+    if detail:
+        parts.extend(["", f"**lint 說明**：{detail}"])
+    if suggested_fix:
+        parts.append(f"**lint 建議**：{suggested_fix}")
+    parts.extend([
+        "",
+        "請：",
+        "1. 讀過上述頁面後，明確指出兩段陳述具體在哪一點相互衝突",
+        "2. 提出 3 個可能的化解方案（例：改頁 A、改頁 B、加 disambiguation、"
+        "建 compare 頁、判定為「不衝突 / 不需改」）",
+        "3. 對每個方案說明利弊與適用情境",
+        "",
+        "我會接著與你討論細節，最後挑一個方向後再請你產生具體文字，"
+        "我會手動 📖 存入 Wiki。",
+    ])
+
+    pages = [p for p in [page, other] if p]
+    return {"title": title, "seed_message": "\n".join(parts), "pages": pages}
+
+
 async def repair_orphan(wiki_dir: Path, orphan_path: str, cfg: dict) -> dict:
     """Add bidirectional cross-references between an orphan and 1-2 partner
     pages. LLM picks the partners; existing ingest-apply-update prompt does

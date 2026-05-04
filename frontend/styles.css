@@ -355,6 +355,16 @@ details.lint-cat li a:hover { text-decoration: underline; }
 .lint-repair-btn:hover:not(:disabled) { background: #ddd6fe; }
 .lint-repair-btn:disabled { opacity: 0.6; cursor: default; }
 
+/* Discussion button — opens a chat conversation seeded for human-in-the-loop
+   contradiction resolution. Cyan/blue tone signals "talk, no auto-edit". */
+.lint-discuss-btn {
+  background: #ecfeff; border: 1px solid #a5f3fc; color: #0e7490;
+  padding: 1px 7px; border-radius: 3px; cursor: pointer; font-size: 11px;
+  margin-left: 4px;
+}
+.lint-discuss-btn:hover:not(:disabled) { background: #cffafe; }
+.lint-discuss-btn:disabled { opacity: 0.6; cursor: default; }
+
 /* Bulk-fix button living inside the category <summary> */
 .lint-bulk-fix {
   background: #fef3c7; border: 1px solid #fde68a; color: #92400e;

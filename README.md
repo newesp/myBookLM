@@ -160,6 +160,7 @@ wiki/
 | POST | `/wiki/fix-broken-link` | `{from_path, to_path}` → unlinks every broken `[text](to)` in the page, keeping the visible text |
 | POST | `/wiki/migrate/sources-plaintext` | One-shot: flatten every page's `## Sources` markdown links to plain text (idempotent) |
 | POST | `/wiki/repair/orphan` | `{page}` → LLM picks partners and adds bidirectional cross-references — costs tokens |
+| POST | `/wiki/repair/discuss` | `{issue}` → create a fresh conversation seeded for human-in-the-loop discussion of a lint issue (typically `contradiction`); returns `{conversation_id, seed_message, ...}`. No LLM call here — the user reviews the seed in the chat input and sends it; the regular `/chat` path delivers wiki context |
 
 **Cost note**: Each `📖 存入 Wiki` typically runs 1 Plan call + 2–4 Apply calls (one per page). Use a cheaper model in Settings if budget-sensitive — the Plan/Apply prompts are language-neutral and work with all four providers.
 

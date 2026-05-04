@@ -627,6 +627,9 @@ function renderLintResults(r, isLlm) {
         fixBtn = `<button class="lint-fix-btn" data-from="${escapeHtml(iss.page)}" data-to="${escapeHtml(iss.to)}" title="把 [text](broken) 換成純文字 text">🔧 移除連結</button>`;
       } else if (isOrphan && iss.page) {
         fixBtn = `<button class="lint-repair-btn" data-action="orphan" data-page="${escapeHtml(iss.page)}" title="LLM 挑 1-2 頁建立雙向交叉引用（會花 token）">🛠 LLM 修</button>`;
+      } else if (cat === "contradiction" && iss.page) {
+        const issBlob = encodeURIComponent(JSON.stringify(iss));
+        fixBtn = `<button class="lint-discuss-btn" data-issue="${issBlob}" title="開新對話與 AI 討論這個矛盾，最後手動 📖 存入 Wiki">💬 與 AI 討論</button>`;
       }
       return `
         <li data-cat="${cat}" data-idx="${idx}">
@@ -854,6 +857,60 @@ function hookLintActions(container, body, contentEl) {
         }
       } catch (err) {
         alert("orphan 修復失敗：" + err.message);
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    });
+  });
+  container.querySelectorAll(".lint-discuss-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      let iss;
+      try {
+        iss = JSON.parse(decodeURIComponent(btn.dataset.issue));
+      } catch {
+        alert("issue payload 解析失敗");
+        return;
+      }
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const r = await api("/wiki/repair/discuss", {
+          method: "POST",
+          body: { issue: iss },
+        });
+        // The new conversation is created under the default topic. If the
+        // user is currently viewing a different topic, switch to "全部" so
+        // the new conv is visible in the picker.
+        if (state.topicId && state.topicId !== r.topic_id) {
+          state.topicId = 0;
+          localStorage.setItem(SAVED_TOPIC_KEY, "0");
+          await loadTopics();
+        }
+        // Ensure wiki is selected so two-pass retrieval delivers context.
+        if (state.wikiInfo && state.wikiInfo.exists) {
+          state.selected.add(WIKI_SLUG);
+        }
+        // Close wiki viewer modal if open.
+        const modal = $("#source-modal");
+        if (modal) modal.hidden = true;
+        switchTab("chat");
+        await loadConvs();
+        state.convId = r.conversation_id;
+        const picker = $("#conv-picker");
+        if (picker) picker.value = String(r.conversation_id);
+        await loadMessages();
+        // Pre-fill input with the seed; user reviews + clicks send so the
+        // regular /chat path runs (no extra LLM endpoint required).
+        const input = $("#chat-input");
+        if (input) {
+          input.value = r.seed_message;
+          input.dispatchEvent(new Event("input"));
+          input.focus();
+        }
+      } catch (err) {
+        alert("建立討論對話失敗：" + err.message);
         btn.disabled = false;
         btn.innerHTML = orig;
       }
