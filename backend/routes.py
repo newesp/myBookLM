@@ -524,6 +524,87 @@ async def wiki_ingest_qa(body: WikiIngestQA, request: Request):
         raise HTTPException(500, f"{type(e).__name__}: {e}")
 
 
+@router.post("/wiki/lint")
+def wiki_lint(request: Request):
+    """Cheap structural lint. No LLM cost — runs synchronously."""
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    return wikimod.deterministic_lint(wiki_dir)
+
+
+@router.post("/wiki/lint/llm")
+async def wiki_lint_llm(request: Request):
+    """LLM-based lint. Costs tokens — frontend should confirm before calling."""
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    cfg = cfgmod.load_config(request.app.state.config_path)
+    try:
+        return await wikimod.llm_lint(wiki_dir, cfg)
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
+class FixBrokenLink(BaseModel):
+    # Field names use _path suffix because `from` is a Python keyword.
+    # JSON callers send `from_path` and `to_path`.
+    from_path: str
+    to_path: str
+
+
+class WikiRepairOrphan(BaseModel):
+    page: str
+
+
+@router.post("/wiki/repair/orphan")
+async def wiki_repair_orphan(body: WikiRepairOrphan, request: Request):
+    """LLM-driven repair: find 1-2 partner pages and add bidirectional
+    cross-references. Costs tokens — frontend should confirm before calling.
+    """
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    cfg = cfgmod.load_config(request.app.state.config_path)
+    try:
+        return await wikimod.repair_orphan(wiki_dir, body.page, cfg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError:
+        raise HTTPException(404, f"Wiki page not found: {body.page}")
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
+@router.post("/wiki/migrate/sources-plaintext")
+def wiki_migrate_sources_plaintext(request: Request):
+    """One-shot migration: convert every page's `## Sources` markdown-link
+    entries into plain-text references. Idempotent.
+    """
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    return wikimod.migrate_sources_to_plaintext(wiki_dir)
+
+
+@router.post("/wiki/fix-broken-link")
+def wiki_fix_broken_link(body: FixBrokenLink, request: Request):
+    """Strip a broken markdown link from a page, keeping the visible text.
+
+    Idempotent: re-running with the same target after the fix returns
+    `removed=0` rather than failing.
+    """
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    try:
+        return wikimod.unlink_broken(wiki_dir, body.from_path, body.to_path)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError:
+        raise HTTPException(404, f"Wiki page not found: {body.from_path}")
+
+
 # ---------- Chat ----------
 
 class ChatRequest(BaseModel):

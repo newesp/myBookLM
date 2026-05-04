@@ -33,7 +33,18 @@ conventions. Required structure:
    to other pages (use the existing related pages above to choose links —
    only link to pages that actually exist)
 3. Body sections (free-form, well-organized prose)
-4. Trailing `## Sources` section with citations
+4. Trailing `## Sources` section with citations — **plain text only, NO
+   markdown links**. Reference original raw resources by their slug + chapter
+   identifier. Example:
+   ```
+   ## Sources
+
+   - jed-mckenna-spiritually-incorrect-enlightenment §06 "Blues for Buddha"
+   - jed-mckenna-notebook §02 "Interview with Jed McKenna"
+   ```
+   The slug is the stable identifier of the source PDF and never changes when
+   the resource is renamed in the UI. Do **not** use `[label](path.md)` syntax
+   inside Sources — those become broken wiki links.
 
 Keep the page focused on this single topic. If tangential material belongs
 elsewhere, link to those pages rather than duplicating.

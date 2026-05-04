@@ -65,13 +65,22 @@ All under `/api/wiki/*`. Wiki state is its own layer — not in `list_sources()`
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/wiki/info` | `{exists, page_count, by_type, last_updated, index_summary, schema_version}` |
+| GET | `/wiki/info` | `{exists, page_count, by_type, last_updated, index_summary, broken_link_count, broken_links[≤50], schema_version}` |
 | GET | `/wiki/pages` | List of `{path, type, slug, title, description}` |
 | GET | `/wiki/page?path=<type>/<slug>.md` | Read one page (path validated: `<type>/<slug>.md`, no `..`) |
 | GET | `/wiki/index` | Raw `index.md` |
 | GET | `/wiki/log` | Raw `log.md` |
 | POST | `/wiki/init` | Manually scaffold (otherwise auto on first ingest) |
-| POST | `/wiki/ingest/qa` | `{question, answer}` → Plan + Apply + regen index + append log; returns `{ok, operations, tokens_in, tokens_out, log_entry}` |
+| POST | `/wiki/ingest/qa` | `{question, answer}` → Plan + Apply + regen index + append log; returns `{ok, operations, tokens_in, tokens_out, log_entry, broken_link_count, broken_links[≤20]}` |
+| POST | `/wiki/lint` | Cheap structural lint (no LLM). Returns `{exists, page_count, issue_count, by_category, issues:[{category, page, detail, [to]}]}`. Categories: `broken_link`, `orphan`, `empty_page`, `missing_h1`, `missing_header_blockquote`, `missing_sources_section`. |
+| POST | `/wiki/lint/llm` | LLM-based lint using `prompts/lint.md`. Returns `{exists, issues, summary, tokens_in, tokens_out, pages_scanned, pages_total, truncated}`. Categories per `lint.md`: `contradiction`, `stale_claim`, `orphan`, `broken_link`, `duplicate`, `misclassified`, `missing_required_section`. Pages dump capped at 50k chars; oversized wikis are truncated (LLM is told to treat omitted pages as out-of-scope). |
+| POST | `/wiki/fix-broken-link` | `{from_path, to_path}` → strip every `[text](href)` in `from_path` whose href resolves to `to_path`, leaving bare `text`. Returns `{ok, removed, from, to}`. Idempotent (`removed=0` when already clean). Logs each fix to `log.md`. |
+| POST | `/wiki/migrate/sources-plaintext` | One-shot migration: every page's `## Sources` section gets its markdown links flattened to plain text. Returns `{pages_scanned, pages_changed, links_removed, changes}`. Idempotent. |
+| POST | `/wiki/repair/orphan` | `{page}` → LLM picks 1-2 partner pages and runs `ingest-apply-update` on orphan + each partner to add bidirectional cross-references. Returns `{ok, orphan, partners, applied, skipped, [skip_reason], tokens_in, tokens_out}`. Costs tokens (1 + N LLM calls); frontend gates with confirm. |
+
+**Sources convention**: page Sources entries are always plain text references to raw resources by **slug** (the stable identifier — does not change when the resource is renamed in the UI), e.g. `- jed-mckenna-notebook §06 "Blues for Buddha"`. The ingest-apply prompts enforce this rule for new pages; the migration above retrofits existing pages.
+
+After every ingest, `wiki.find_broken_links()` scans every page body for `[text](*.md)` references that resolve to non-existent pages and appends a `⚠ broken links: N` line to `log.md` if any are present. The same scan runs on every `GET /wiki/info` so the frontend can show a count badge and a collapsible list in the viewer modal. The two lint endpoints are user-triggered from the wiki viewer (🩺 結構檢查 / 🧠 用 LLM 深度檢查); the LLM variant is gated by a confirm() because it costs tokens.
 
 `config.json` wiki block: `system_prompt_template` (with `{{wiki_content}}` placeholder) and `page_separator`. Deep-merged on load; patchable via `POST /api/config { "wiki": {...} }`.
 

@@ -155,6 +155,11 @@ wiki/
 | GET | `/wiki/log` | Raw `log.md` content |
 | POST | `/wiki/init` | Manually scaffold the wiki (otherwise auto-init on first ingest) |
 | POST | `/wiki/ingest/qa` | `{question, answer}` → run Plan + Apply, regen index, append log |
+| POST | `/wiki/lint` | Cheap structural lint (broken links, orphans, missing sections, empty pages) — no LLM cost |
+| POST | `/wiki/lint/llm` | LLM-based semantic lint (duplicates, contradictions, stale claims) — costs tokens |
+| POST | `/wiki/fix-broken-link` | `{from_path, to_path}` → unlinks every broken `[text](to)` in the page, keeping the visible text |
+| POST | `/wiki/migrate/sources-plaintext` | One-shot: flatten every page's `## Sources` markdown links to plain text (idempotent) |
+| POST | `/wiki/repair/orphan` | `{page}` → LLM picks partners and adds bidirectional cross-references — costs tokens |
 
 **Cost note**: Each `📖 存入 Wiki` typically runs 1 Plan call + 2–4 Apply calls (one per page). Use a cheaper model in Settings if budget-sensitive — the Plan/Apply prompts are language-neutral and work with all four providers.
 

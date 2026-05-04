@@ -411,14 +411,17 @@ function renderWikiItem() {
   const w = state.wikiInfo;
   const checked = state.selected.has(WIKI_SLUG);
   const exists = w && w.exists;
-  const meta = exists
+  const metaText = exists
     ? `${w.page_count} 頁${w.last_updated ? " · " + fmtWikiTimestamp(w.last_updated) : ""}`
     : "尚未建立 — 點 AI 訊息上的「📖 存入 Wiki」即可開始";
+  const brokenSuffix = exists && w.broken_link_count
+    ? ` · <span class="wiki-broken-count" title="點檢視可看 broken link 清單">⚠ ${w.broken_link_count} broken</span>`
+    : "";
   li.innerHTML = `
     <input type="checkbox" ${checked ? "checked" : ""} ${exists ? "" : "disabled"}>
     <div class="title-block">
       <div class="title-name">📖 LLM Wiki</div>
-      <div class="meta"><span class="type-badge badge-wiki">wiki</span> ${escapeHtml(meta)}</div>
+      <div class="meta"><span class="type-badge badge-wiki">wiki</span> ${escapeHtml(metaText)}${brokenSuffix}</div>
     </div>
     <div class="source-menu-wrap">
       ${exists ? '<button class="source-menu-btn" title="檢視">⋮</button>' : ""}
@@ -461,16 +464,434 @@ async function openWikiViewer() {
   const counts = info.by_type || {};
   const countLine = ["concept", "entity", "summary", "compare", "synthesis"]
     .map((t) => `${t}: ${counts[t] || 0}`).join(" · ");
+  const brokenList = Array.isArray(info.broken_links) ? info.broken_links : [];
+  const brokenHtml = info.broken_link_count > 0
+    ? `<details class="wiki-broken-panel" ${brokenList.length <= 5 ? "open" : ""}>
+         <summary>⚠ ${info.broken_link_count} broken link${info.broken_link_count > 1 ? "s" : ""}${brokenList.length < info.broken_link_count ? `（顯示前 ${brokenList.length} 筆）` : ""}</summary>
+         <ul class="wiki-broken-list">
+           ${brokenList.map((b) => `
+             <li>
+               <a href="#" class="wiki-broken-from" data-path="${escapeHtml(b.from)}"><code>${escapeHtml(b.from)}</code></a>
+               → <code class="wiki-broken-to">${escapeHtml(b.to)}</code>
+               <small>（${escapeHtml(b.text)}）</small>
+             </li>`).join("")}
+         </ul>
+       </details>`
+    : "";
   body.innerHTML = `
     <div class="wiki-viewer">
       <div class="wiki-viewer-meta">
         共 ${info.page_count} 頁 · ${escapeHtml(countLine)}
         ${info.last_updated ? "<br>最後更新：" + escapeHtml(info.last_updated) : ""}
+        <div class="wiki-toolbar">
+          <button class="wiki-lint-btn" data-mode="cheap">🩺 結構檢查</button>
+          <button class="wiki-lint-btn" data-mode="llm">🧠 用 LLM 深度檢查</button>
+          <button class="wiki-migrate-btn" data-action="sources-plaintext"
+            title="把所有頁面 ## Sources 區塊裡的 markdown link 轉成純文字（保留可見字）">
+            🧹 Sources 純文字化
+          </button>
+        </div>
       </div>
+      ${brokenHtml}
+      <div class="wiki-lint-results" hidden></div>
       <div class="wiki-viewer-content"></div>
     </div>`;
-  renderWikiIndexInto(body.querySelector(".wiki-viewer-content"), idx.content || "");
+  const contentEl = body.querySelector(".wiki-viewer-content");
+  const lintResults = body.querySelector(".wiki-lint-results");
+  // Clicking "from" link in broken-link list jumps to that page
+  body.querySelectorAll(".wiki-broken-from").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      renderWikiPageInto(contentEl, a.dataset.path);
+    });
+  });
+  body.querySelectorAll(".wiki-lint-btn").forEach((btn) => {
+    btn.addEventListener("click", () => runWikiLint(btn.dataset.mode, lintResults, body, contentEl));
+  });
+  body.querySelectorAll(".wiki-migrate-btn").forEach((btn) => {
+    btn.addEventListener("click", () => runWikiMigration(btn, body, contentEl, lintResults));
+  });
+  renderWikiIndexInto(contentEl, idx.content || "");
   $("#source-modal").hidden = false;
+}
+
+async function runWikiMigration(btn, body, contentEl, lintResults) {
+  const action = btn.dataset.action;
+  if (action !== "sources-plaintext") return;
+  if (!confirm(
+    "🧹 Sources 純文字化\n\n" +
+    "把所有頁面的「## Sources」區塊裡的 markdown link 轉成純文字（保留可見文字、移除 [](path) 包裝）。\n\n" +
+    "這是無損操作（內容不會掉），執行後 broken link 數通常會大幅減少。\n" +
+    "Idempotent — 跑過再跑也不會壞。要繼續嗎？"
+  )) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 處理中…';
+  try {
+    const r = await api("/wiki/migrate/sources-plaintext", { method: "POST" });
+    btn.textContent = orig;
+    btn.disabled = false;
+    const summary =
+      `✓ 已掃描 ${r.pages_scanned} 頁，${r.pages_changed} 頁被修改，` +
+      `共移除 ${r.links_removed} 個 markdown link。`;
+    alert(summary + (r.changes && r.changes.length
+      ? "\n\n受影響頁面：\n" + r.changes.map((c) => `  ${c.path} (×${c.links_removed})`).join("\n")
+      : ""));
+    // Refresh wiki info, broken-link panel, and re-run cheap lint.
+    await refreshWikiAfterFix(body, contentEl);
+  } catch (e) {
+    alert("Sources 純文字化失敗：" + e.message);
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+
+const LINT_CATEGORY_LABEL = {
+  broken_link: "🔗 broken link",
+  orphan: "🏝 orphan（無人連入）",
+  empty_page: "📭 空頁",
+  missing_h1: "🔠 缺 H1",
+  missing_header_blockquote: "📝 缺 header blockquote",
+  missing_sources_section: "📚 缺 ## Sources",
+  duplicate: "👯 重複",
+  contradiction: "⚡ 矛盾",
+  stale_claim: "🕰 過時陳述",
+  misclassified: "🗂 分類不符",
+};
+
+async function runWikiLint(mode, container, body, contentEl) {
+  const llm = mode === "llm";
+  if (llm && !confirm(
+    "🧠 用 LLM 做深度 lint？\n\n" +
+    "這會把 wiki 全部頁面送進 LLM 跑 1 次呼叫，依模型可能花費數千 tokens。\n" +
+    "結構性問題（broken link / orphan / 缺欄位）建議先用「結構檢查」，那個免錢。"
+  )) return;
+
+  // Disable both buttons during run
+  const btns = body.querySelectorAll(".wiki-lint-btn");
+  btns.forEach((b) => (b.disabled = true));
+  const trigger = body.querySelector(`.wiki-lint-btn[data-mode="${mode}"]`);
+  const orig = trigger.textContent;
+  trigger.innerHTML = '<span class="spinner"></span> 檢查中…';
+
+  try {
+    const r = await api(llm ? "/wiki/lint/llm" : "/wiki/lint", { method: "POST" });
+    container.hidden = false;
+    container.innerHTML = renderLintResults(r, llm);
+    hookLintActions(container, body, contentEl);
+    // Remember which mode the user last ran so refreshWikiAfterFix() can
+    // decide whether to re-run cheap lint (cheap=fine to re-run) vs leave the
+    // LLM-mode panel intact (re-running LLM costs thousands of tokens).
+    body.dataset.lastLintMode = mode;
+  } catch (e) {
+    container.hidden = false;
+    container.innerHTML = `<div class="wiki-broken-link">Lint 失敗：${escapeHtml(e.message)}</div>`;
+  } finally {
+    btns.forEach((b) => (b.disabled = false));
+    trigger.textContent = orig;
+  }
+}
+
+function renderLintResults(r, isLlm) {
+  const issues = r.issues || [];
+  const headerExtras = isLlm
+    ? `<small>${r.pages_scanned}/${r.pages_total} pages · ${r.tokens_in || 0} in / ${r.tokens_out || 0} out${r.truncated ? " · ⚠ truncated" : ""}</small>`
+    : `<small>page count: ${r.page_count}</small>`;
+  if (!issues.length) {
+    return `<div class="wiki-lint-empty">
+      ✅ ${isLlm ? "LLM" : "結構"}檢查未發現問題。 ${headerExtras}
+      ${isLlm && r.summary ? `<div class="wiki-lint-summary">${escapeHtml(r.summary)}</div>` : ""}
+    </div>`;
+  }
+  // Group by category
+  const byCat = {};
+  issues.forEach((iss) => {
+    (byCat[iss.category] = byCat[iss.category] || []).push(iss);
+  });
+  const sections = Object.entries(byCat).map(([cat, list]) => {
+    const label = LINT_CATEGORY_LABEL[cat] || cat;
+    const isBroken = cat === "broken_link";
+    const bulkBtn = isBroken
+      ? ` <button class="lint-bulk-fix" data-cat="broken_link">🔧 全部移除連結（保留文字）</button>`
+      : "";
+    const isOrphan = cat === "orphan";
+    const items = list.map((iss, idx) => {
+      const pageRef = iss.page
+        ? `<a href="#" data-lint-page="${escapeHtml(iss.page)}"><code>${escapeHtml(iss.page)}</code></a>`
+        : "";
+      const fix = iss.suggested_fix
+        ? `<div class="lint-fix">建議：${escapeHtml(iss.suggested_fix)}</div>`
+        : "";
+      let fixBtn = "";
+      if (isBroken && iss.to) {
+        fixBtn = `<button class="lint-fix-btn" data-from="${escapeHtml(iss.page)}" data-to="${escapeHtml(iss.to)}" title="把 [text](broken) 換成純文字 text">🔧 移除連結</button>`;
+      } else if (isOrphan && iss.page) {
+        fixBtn = `<button class="lint-repair-btn" data-action="orphan" data-page="${escapeHtml(iss.page)}" title="LLM 挑 1-2 頁建立雙向交叉引用（會花 token）">🛠 LLM 修</button>`;
+      }
+      return `
+        <li data-cat="${cat}" data-idx="${idx}">
+          ${pageRef} ${fixBtn}
+          <div class="lint-detail">${escapeHtml(iss.detail || "")}</div>
+          ${fix}
+        </li>`;
+    }).join("");
+    return `
+      <details class="lint-cat" open>
+        <summary>${label} <span class="lint-count">${list.length}</span>${bulkBtn}</summary>
+        <ul>${items}</ul>
+      </details>`;
+  }).join("");
+  return `
+    <div class="wiki-lint-header">
+      <strong>${isLlm ? "🧠 LLM" : "🩺 結構"} lint：${issues.length} 個問題</strong>
+      ${headerExtras}
+      ${isLlm && r.summary ? `<div class="wiki-lint-summary">${escapeHtml(r.summary)}</div>` : ""}
+    </div>
+    ${sections}`;
+}
+
+async function unlinkBroken(fromPath, toPath) {
+  return api("/wiki/fix-broken-link", {
+    method: "POST",
+    body: { from_path: fromPath, to_path: toPath },
+  });
+}
+
+async function refreshWikiAfterFix(body, contentEl, fixed = null) {
+  // `fixed` (optional): {category, page} describing the issue we just
+  // resolved. Used to surgically remove the matching <li> from an LLM-mode
+  // lint panel without re-running the expensive LLM lint.
+  await loadSources();
+  try {
+    const info = await api("/wiki/info");
+    rebuildBrokenPanel(body, info, contentEl);
+
+    const container = body.querySelector(".wiki-lint-results");
+    const lastMode = body.dataset.lastLintMode;
+    if (lastMode === "llm" && container && !container.hidden) {
+      // Don't re-run LLM lint — it costs thousands of tokens. Instead,
+      // surgically prune the fixed issue from the displayed list. The user
+      // can re-run 🧠 manually if they want fresh semantic findings.
+      pruneLintIssueFromDom(container, fixed);
+      ensureStaleLintNotice(container);
+      return;
+    }
+    // Cheap lint mode (or no lint run yet): re-run cheap lint so the list
+    // reflects the new state.
+    const lintRes = await api("/wiki/lint", { method: "POST" });
+    if (container) {
+      container.hidden = false;
+      container.innerHTML = renderLintResults(lintRes, false);
+      hookLintActions(container, body, contentEl);
+    }
+  } catch (e) {
+    console.warn("Lint refresh failed:", e);
+  }
+}
+
+function pruneLintIssueFromDom(container, fixed) {
+  // fixed shapes:
+  //   { category, page }              — single non-broken_link issue (e.g. orphan)
+  //   { category, page, to }          — single broken_link unlink
+  //   { category, pairs: [{page,to}]} — batch broken_link unlink
+  if (!fixed) return;
+  const pairs = fixed.pairs
+    || (fixed.page !== undefined ? [{ page: fixed.page, to: fixed.to }] : []);
+  if (!pairs.length) return;
+  const sel = fixed.category
+    ? `li[data-cat="${fixed.category}"]`
+    : "li[data-cat]";
+
+  let removed = 0;
+  pairs.forEach((t) => {
+    container.querySelectorAll(sel).forEach((li) => {
+      const pageRef = li.querySelector("[data-lint-page]");
+      if (!pageRef || pageRef.dataset.lintPage !== t.page) return;
+      // If `to` was supplied (broken_link), only remove the <li> whose fix
+      // button points at the same target — a single page can have multiple
+      // distinct broken_link entries.
+      if (t.to !== undefined && t.to !== null) {
+        const fixBtn = li.querySelector(".lint-fix-btn");
+        if (!fixBtn || fixBtn.dataset.to !== t.to) return;
+      }
+      const section = li.closest("details.lint-cat");
+      li.remove();
+      removed++;
+      if (section) {
+        const countEl = section.querySelector(".lint-count");
+        const remaining = section.querySelectorAll("li[data-cat]").length;
+        if (countEl) countEl.textContent = remaining;
+        if (remaining === 0) section.remove();
+      }
+    });
+  });
+
+  if (removed > 0) {
+    const header = container.querySelector(".wiki-lint-header strong");
+    if (header) {
+      const m = header.textContent.match(/(\d+)\s*個問題/);
+      if (m) {
+        const newCount = Math.max(0, parseInt(m[1], 10) - removed);
+        header.textContent = header.textContent.replace(
+          /\d+\s*個問題/, `${newCount} 個問題`
+        );
+      }
+    }
+  }
+}
+
+function ensureStaleLintNotice(container) {
+  if (container.querySelector(".lint-stale-notice")) return;
+  const notice = document.createElement("div");
+  notice.className = "lint-stale-notice";
+  notice.innerHTML =
+    "ℹ 顯示為上次 🧠 LLM lint 的結果（已剔除剛修好的項目）。" +
+    "若要看新的語意分析，請重新點 🧠 用 LLM 深度檢查。";
+  container.insertBefore(notice, container.firstChild);
+}
+
+function rebuildBrokenPanel(body, info, contentEl) {
+  const panel = body.querySelector(".wiki-broken-panel");
+  const count = info.broken_link_count || 0;
+  if (count === 0) {
+    if (panel) panel.remove();
+    return;
+  }
+  const list = Array.isArray(info.broken_links) ? info.broken_links : [];
+  const html = `
+    <details class="wiki-broken-panel" ${list.length <= 5 ? "open" : ""}>
+      <summary>⚠ ${count} broken link${count > 1 ? "s" : ""}${list.length < count ? `（顯示前 ${list.length} 筆）` : ""}</summary>
+      <ul class="wiki-broken-list">
+        ${list.map((b) => `
+          <li>
+            <a href="#" class="wiki-broken-from" data-path="${escapeHtml(b.from)}"><code>${escapeHtml(b.from)}</code></a>
+            → <code class="wiki-broken-to">${escapeHtml(b.to)}</code>
+            <small>（${escapeHtml(b.text)}）</small>
+          </li>`).join("")}
+      </ul>
+    </details>`;
+  if (panel) {
+    panel.outerHTML = html;
+  } else {
+    // Insert before .wiki-lint-results / .wiki-viewer-content
+    const anchor = body.querySelector(".wiki-lint-results") || body.querySelector(".wiki-viewer-content");
+    anchor.insertAdjacentHTML("beforebegin", html);
+  }
+  body.querySelectorAll(".wiki-broken-from").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      renderWikiPageInto(contentEl, a.dataset.path);
+    });
+  });
+}
+
+function hookLintActions(container, body, contentEl) {
+  container.querySelectorAll("[data-lint-page]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      renderWikiPageInto(contentEl, a.dataset.lintPage);
+    });
+  });
+  container.querySelectorAll(".lint-fix-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const { from, to } = btn.dataset;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const r = await unlinkBroken(from, to);
+        if (r.removed === 0) {
+          alert("沒找到對應的連結（可能已被修掉了）。重新跑一次 lint 看看。");
+        }
+        await refreshWikiAfterFix(body, contentEl, {
+          category: "broken_link", page: from, to,
+        });
+      } catch (err) {
+        alert("修復失敗：" + err.message);
+        btn.disabled = false;
+        btn.textContent = "🔧 移除連結";
+      }
+    });
+  });
+  container.querySelectorAll(".lint-repair-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      if (action !== "orphan") return;
+      const page = btn.dataset.page;
+      if (!confirm(
+        `🛠 LLM 自動修復 orphan：${page}\n\n` +
+        "流程：\n" +
+        "  1. LLM 從現有頁挑 1-2 個最相關的「partner」頁\n" +
+        "  2. 在 orphan 頁與每個 partner 頁加一句雙向交叉引用\n\n" +
+        "會花 1 + N 次 LLM 呼叫（partner 1-2 個）。要繼續嗎？"
+      )) return;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const r = await api("/wiki/repair/orphan", {
+          method: "POST",
+          body: { page },
+        });
+        if (r.skipped) {
+          alert(`LLM 判斷找不到適合的 partner：${r.skip_reason}\n（沒做任何修改）`);
+          // No edits — don't prune; just refresh wiki info.
+          await refreshWikiAfterFix(body, contentEl);
+        } else {
+          const partners = (r.partners || []).map((p) => p.path).join(", ");
+          alert(
+            `✓ 已建立交叉引用\n` +
+            `  orphan: ${r.orphan}\n` +
+            `  partners: ${partners}\n` +
+            `  共改了 ${r.applied.length} 頁\n` +
+            `  tokens: ${r.tokens_in} in / ${r.tokens_out} out`
+          );
+          // The orphan is no longer orphan; remove that entry from the panel.
+          await refreshWikiAfterFix(body, contentEl, {
+            category: "orphan", page: r.orphan,
+          });
+        }
+      } catch (err) {
+        alert("orphan 修復失敗：" + err.message);
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    });
+  });
+  container.querySelectorAll(".lint-bulk-fix").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const cat = btn.dataset.cat;
+      const items = Array.from(container.querySelectorAll(`li[data-cat="${cat}"]`));
+      const targets = items
+        .map((li) => li.querySelector(".lint-fix-btn"))
+        .filter(Boolean)
+        .map((b) => ({ from: b.dataset.from, to: b.dataset.to }));
+      if (!targets.length) return;
+      if (!confirm(`移除 ${targets.length} 個 broken link（保留可見文字）？\n操作會逐一寫進 log.md，可在那裡追蹤。`)) return;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span> 處理中…';
+      try {
+        let totalRemoved = 0;
+        for (const t of targets) {
+          const r = await unlinkBroken(t.from, t.to);
+          totalRemoved += r.removed || 0;
+        }
+        await refreshWikiAfterFix(body, contentEl, {
+          category: "broken_link",
+          pairs: targets.map((t) => ({ page: t.from, to: t.to })),
+        });
+        console.log(`[wiki bulk unlink] removed ${totalRemoved} link(s) across ${targets.length} target(s)`);
+      } catch (err) {
+        alert("批次修復中斷：" + err.message);
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    });
+  });
 }
 
 function renderWikiIndexInto(container, indexMd) {

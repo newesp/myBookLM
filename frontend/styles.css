@@ -247,6 +247,123 @@ a.wiki-link-broken::after { content: " ⚠"; font-size: 11px; }
   color: #991b1b; font-size: 13px; line-height: 1.6;
 }
 
+/* "⚠ N broken" inline badge in the wiki source-list entry */
+.wiki-broken-count {
+  color: #b91c1c; font-weight: 500;
+}
+
+/* Broken-link summary panel above the wiki viewer index */
+.wiki-broken-panel {
+  margin: 8px 0 4px; padding: 8px 12px;
+  background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
+  font-size: 12px; color: #7f1d1d;
+}
+.wiki-broken-panel summary {
+  cursor: pointer; font-weight: 600;
+  padding: 2px 0;
+}
+.wiki-broken-panel summary:hover { color: #991b1b; }
+.wiki-broken-list {
+  margin: 8px 0 0; padding-left: 20px; max-height: 200px; overflow-y: auto;
+}
+.wiki-broken-list li { margin: 4px 0; line-height: 1.5; }
+.wiki-broken-list code {
+  background: #fff; border: 1px solid #fecaca; border-radius: 3px;
+  padding: 1px 5px; font-size: 11px;
+}
+.wiki-broken-list .wiki-broken-from { color: #1d4ed8; text-decoration: none; }
+.wiki-broken-list .wiki-broken-from:hover { text-decoration: underline; }
+.wiki-broken-list .wiki-broken-to { color: #991b1b; }
+.wiki-broken-list small { color: #6b7280; }
+
+/* Lint toolbar inside the wiki viewer meta block */
+.wiki-toolbar {
+  margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;
+}
+.wiki-lint-btn {
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+}
+.wiki-lint-btn:hover:not(:disabled) { background: #dbeafe; }
+.wiki-lint-btn:disabled { opacity: 0.6; cursor: default; }
+.wiki-migrate-btn {
+  background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+}
+.wiki-migrate-btn:hover:not(:disabled) { background: #dcfce7; }
+.wiki-migrate-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* Lint result panel sits between the meta block and the index/page body */
+.wiki-lint-results {
+  margin: 8px 0; padding: 10px 12px;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+  font-size: 12px; max-height: 320px; overflow-y: auto;
+}
+.wiki-lint-empty { color: #166534; }
+.wiki-lint-header { margin-bottom: 8px; line-height: 1.6; }
+.wiki-lint-header small { color: #64748b; margin-left: 8px; }
+.wiki-lint-summary {
+  margin-top: 4px; padding: 6px 8px;
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 4px;
+  color: #334155; font-style: italic;
+}
+details.lint-cat { margin: 6px 0; }
+details.lint-cat > summary {
+  cursor: pointer; font-weight: 600; padding: 4px 0;
+  color: #1f2937;
+}
+details.lint-cat > summary:hover { color: #111827; }
+.lint-count {
+  background: #e2e8f0; color: #475569;
+  padding: 1px 7px; border-radius: 8px; font-size: 11px; margin-left: 4px;
+}
+details.lint-cat ul { margin: 4px 0 8px; padding-left: 20px; }
+details.lint-cat li { margin: 6px 0; line-height: 1.5; }
+details.lint-cat li code {
+  background: #fff; border: 1px solid #cbd5e1; border-radius: 3px;
+  padding: 1px 5px; font-size: 11px;
+}
+details.lint-cat li a { color: #1d4ed8; text-decoration: none; }
+details.lint-cat li a:hover { text-decoration: underline; }
+.lint-detail { color: #475569; margin-top: 2px; }
+.lint-fix { color: #047857; margin-top: 2px; font-size: 11.5px; }
+
+/* Inserted at the top of the lint-results panel after a fix in LLM mode,
+   reminding the user the displayed list is no longer fresh. */
+.lint-stale-notice {
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px;
+  padding: 6px 10px; margin-bottom: 8px;
+  color: #92400e; font-size: 11.5px; line-height: 1.5;
+}
+
+/* Per-issue 🔧 fix button next to a broken_link page reference */
+.lint-fix-btn {
+  background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857;
+  padding: 1px 7px; border-radius: 3px; cursor: pointer; font-size: 11px;
+  margin-left: 4px;
+}
+.lint-fix-btn:hover:not(:disabled) { background: #d1fae5; }
+.lint-fix-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* LLM-driven repair button (e.g. orphan auto-fix). Same shape as fix-btn
+   but distinct color to signal "this costs tokens". */
+.lint-repair-btn {
+  background: #ede9fe; border: 1px solid #c4b5fd; color: #5b21b6;
+  padding: 1px 7px; border-radius: 3px; cursor: pointer; font-size: 11px;
+  margin-left: 4px;
+}
+.lint-repair-btn:hover:not(:disabled) { background: #ddd6fe; }
+.lint-repair-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* Bulk-fix button living inside the category <summary> */
+.lint-bulk-fix {
+  background: #fef3c7; border: 1px solid #fde68a; color: #92400e;
+  padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;
+  margin-left: 8px; font-weight: normal;
+}
+.lint-bulk-fix:hover:not(:disabled) { background: #fde68a; }
+.lint-bulk-fix:disabled { opacity: 0.6; cursor: default; }
+
 .save-wiki-btn {
   background: #fff8e1; border: 1px solid #fde68a; color: #92400e;
   padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
