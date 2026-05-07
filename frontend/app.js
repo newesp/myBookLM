@@ -630,6 +630,9 @@ function renderLintResults(r, isLlm) {
       } else if (cat === "contradiction" && iss.page) {
         const issBlob = encodeURIComponent(JSON.stringify(iss));
         fixBtn = `<button class="lint-discuss-btn" data-issue="${issBlob}" title="開新對話與 AI 討論這個矛盾，最後手動 📖 存入 Wiki">💬 與 AI 討論</button>`;
+      } else if (cat === "duplicate" && iss.page) {
+        const issBlob = encodeURIComponent(JSON.stringify(iss));
+        fixBtn = `<button class="lint-plan-btn" data-issue="${issBlob}" title="LLM 提合併計畫，預覽 diff 後再決定是否套用（會花 token）">🛠 LLM 修</button>`;
       }
       return `
         <li data-cat="${cat}" data-idx="${idx}">
@@ -652,6 +655,174 @@ function renderLintResults(r, isLlm) {
     </div>
     ${sections}`;
 }
+
+// ---------- Wiki repair: diff modal ----------
+// LCS-based aligned line diff. Returns rows of {left, right, op}; "eq" rows
+// have both sides populated, "del" rows have right="", "add" rows have left="".
+// O(m*n) memory — fine for typical wiki page sizes (< 1000 lines each).
+function alignedLineDiff(a, b) {
+  const la = a.split("\n");
+  const lb = b.split("\n");
+  const m = la.length;
+  const n = lb.length;
+  // dp[i][j] = LCS length of la[i..] and lb[j..]
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = la[i] === lb[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const rows = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (la[i] === lb[j]) {
+      rows.push({ left: la[i], right: lb[j], op: "eq" }); i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      rows.push({ left: la[i], right: "", op: "del" }); i++;
+    } else {
+      rows.push({ left: "", right: lb[j], op: "add" }); j++;
+    }
+  }
+  while (i < m) rows.push({ left: la[i++], right: "", op: "del" });
+  while (j < n) rows.push({ left: "", right: lb[j++], op: "add" });
+  return rows;
+}
+
+function renderDiffTable(before, after) {
+  const rows = alignedLineDiff(before, after);
+  const cells = rows.map((r) => {
+    const leftCls = r.op === "eq" ? "eq" : (r.op === "del" ? "del" : "empty");
+    const rightCls = r.op === "eq" ? "eq" : (r.op === "add" ? "add" : "empty");
+    return `<div class="diff-cell ${leftCls}">${escapeHtml(r.left || " ")}</div>` +
+           `<div class="diff-cell ${rightCls}">${escapeHtml(r.right || " ")}</div>`;
+  }).join("");
+  return `
+    <div class="diff-table">
+      <div class="diff-col-header before">舊內容（before）</div>
+      <div class="diff-col-header after">新內容（after）</div>
+      ${cells}
+    </div>`;
+}
+
+// `wikiBody` and `contentEl` are the wiki viewer elements that should be
+// refreshed after a successful apply (so the lint panel + page count update).
+function openRepairModal(plan, issue, wikiBody, contentEl) {
+  const modal = $("#repair-modal");
+  const titleEl = $("#repair-modal-title");
+  const metaEl = $("#repair-modal-meta");
+  const bodyEl = $("#repair-modal-body");
+  const cancelBtn = $("#repair-cancel-btn");
+  const regenBtn = $("#repair-regen-btn");
+  const applyBtn = $("#repair-apply-btn");
+
+  titleEl.textContent = `合併重複頁 · 預覽 (${plan.kind || "duplicate-merge"})`;
+  const expiresIn = Math.max(
+    0, Math.round((plan.expires_at * 1000 - Date.now()) / 1000)
+  );
+  metaEl.textContent =
+    `tokens: ${plan.tokens_in || 0} in / ${plan.tokens_out || 0} out · ` +
+    `plan_id: ${plan.plan_id} · 5 分鐘內未套用會過期（剩 ${expiresIn}s）`;
+
+  const sections = (plan.actions || []).map((act) => {
+    const role = act.role === "primary" ? "primary" : "secondary";
+    const roleLabel = role === "primary" ? "保留為主頁（合併內容）" : "改為跳轉 stub";
+    return `
+      <div class="repair-section">
+        <div class="repair-section-header">
+          <span class="role-badge role-${role}">${role}</span>
+          <code>${escapeHtml(act.path)}</code>
+          <span style="color:#6b7280;">— ${roleLabel}</span>
+        </div>
+        ${renderDiffTable(act.before || "", act.after || "")}
+      </div>`;
+  }).join("");
+
+  bodyEl.innerHTML = `
+    ${plan.reasoning ? `<div class="repair-reasoning">💡 ${escapeHtml(plan.reasoning)}</div>` : ""}
+    <div class="repair-meta-line">
+      套用前會把舊內容快照寫入 <code>log.md</code>，可手動還原。
+    </div>
+    ${sections}`;
+
+  modal.hidden = false;
+
+  const close = () => {
+    modal.hidden = true;
+    cancelBtn.onclick = null;
+    regenBtn.onclick = null;
+    applyBtn.onclick = null;
+  };
+
+  cancelBtn.onclick = close;
+  regenBtn.onclick = async () => {
+    regenBtn.disabled = true;
+    applyBtn.disabled = true;
+    const origR = regenBtn.textContent;
+    regenBtn.innerHTML = '<span class="spinner"></span> 重新生成中…';
+    try {
+      const newPlan = await api("/wiki/repair/plan", {
+        method: "POST",
+        body: { issue },
+      });
+      // Re-render in place (handlers stay bound).
+      close();
+      openRepairModal(newPlan, issue, wikiBody, contentEl);
+    } catch (err) {
+      alert("重新生成失敗：" + err.message);
+      regenBtn.disabled = false;
+      applyBtn.disabled = false;
+      regenBtn.textContent = origR;
+    }
+  };
+  applyBtn.onclick = async () => {
+    if (!confirm(
+      `✅ 套用合併計畫？\n\n` +
+      `  primary:   ${plan.primary}\n` +
+      `  secondary: ${plan.secondary}\n\n` +
+      "舊內容會快照進 log.md。"
+    )) return;
+    applyBtn.disabled = true;
+    regenBtn.disabled = true;
+    cancelBtn.disabled = true;
+    const origA = applyBtn.textContent;
+    applyBtn.innerHTML = '<span class="spinner"></span> 套用中…';
+    try {
+      const r = await api("/wiki/repair/apply", {
+        method: "POST",
+        body: { plan_id: plan.plan_id },
+      });
+      close();
+      alert(
+        `✓ 已套用合併計畫\n` +
+        `  共改了 ${r.applied.length} 頁\n` +
+        `  (snapshot 已寫入 log.md)`
+      );
+      // Both pages are now structurally different — easiest is to refresh
+      // wiki info + drop the duplicate row from the LLM lint panel.
+      await refreshWikiAfterFix(wikiBody, contentEl, {
+        category: "duplicate", page: issue.page,
+      });
+    } catch (err) {
+      alert("套用失敗：" + err.message);
+      applyBtn.disabled = false;
+      regenBtn.disabled = false;
+      cancelBtn.disabled = false;
+      applyBtn.textContent = origA;
+    }
+  };
+}
+
+// Wire the close button + backdrop click once at load.
+(function bindRepairModalClose() {
+  const modal = $("#repair-modal");
+  if (!modal) return;
+  $("#repair-modal-close").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.hidden = true;
+  });
+})();
 
 async function unlinkBroken(fromPath, toPath) {
   return api("/wiki/fix-broken-link", {
@@ -911,6 +1082,41 @@ function hookLintActions(container, body, contentEl) {
         }
       } catch (err) {
         alert("建立討論對話失敗：" + err.message);
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    });
+  });
+  container.querySelectorAll(".lint-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      let iss;
+      try {
+        iss = JSON.parse(decodeURIComponent(btn.dataset.issue));
+      } catch {
+        alert("issue payload 解析失敗");
+        return;
+      }
+      if (!confirm(
+        `🛠 LLM 自動合併重複頁：\n` +
+        `  ${iss.page}\n\n` +
+        "流程：\n" +
+        "  1. LLM 讀兩頁全文，挑 primary / secondary，提合併計畫\n" +
+        "  2. 你看 diff 後決定是否套用\n\n" +
+        "計畫階段會花 1 次 LLM 呼叫；先預覽不會寫入 wiki。要繼續嗎？"
+      )) return;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const plan = await api("/wiki/repair/plan", {
+          method: "POST",
+          body: { issue: iss },
+        });
+        openRepairModal(plan, iss, body, contentEl);
+      } catch (err) {
+        alert("產生合併計畫失敗：" + err.message);
+      } finally {
         btn.disabled = false;
         btn.innerHTML = orig;
       }

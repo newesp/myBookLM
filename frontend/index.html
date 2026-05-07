@@ -200,6 +200,25 @@
       <div class="modal-body" id="modal-body"></div>
     </div>
   </div>
+
+  <!-- Wiki repair diff preview modal -->
+  <div id="repair-modal" class="modal-backdrop" hidden>
+    <div class="modal repair-modal">
+      <div class="modal-header">
+        <div class="modal-title">
+          <h3 id="repair-modal-title">合併重複頁 · 預覽</h3>
+          <small id="repair-modal-meta"></small>
+        </div>
+        <button class="modal-close" id="repair-modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="repair-modal-body"></div>
+      <div class="modal-footer" id="repair-modal-footer">
+        <button id="repair-cancel-btn">❌ 取消</button>
+        <button id="repair-regen-btn" title="重新讓 LLM 提一份合併計畫">🔄 重新生成</button>
+        <button id="repair-apply-btn" class="primary">✅ 套用</button>
+      </div>
+    </div>
+  </div>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="/static/app.js"></script>
 </body>

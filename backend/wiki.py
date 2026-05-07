@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -920,6 +922,186 @@ async def repair_orphan(wiki_dir: Path, orphan_path: str, cfg: dict) -> dict:
         "tokens_in": totals["in"],
         "tokens_out": totals["out"],
     }
+
+
+# ---------- Duplicate merge: plan + apply ----------
+
+# Process-local plan cache. Cleared on app restart; that's fine — plans are
+# explicitly cheap to regenerate and we don't want stale plans surviving
+# across deploys.
+_REPAIR_PLAN_CACHE: dict[str, dict] = {}
+_REPAIR_PLAN_TTL_SEC = 300  # 5 minutes
+
+
+def _gc_repair_plans() -> None:
+    """Drop expired entries opportunistically."""
+    now = time.time()
+    for k in [k for k, v in _REPAIR_PLAN_CACHE.items() if v["expires_at"] < now]:
+        _REPAIR_PLAN_CACHE.pop(k, None)
+
+
+async def plan_repair_duplicate(
+    wiki_dir: Path, issue: dict, cfg: dict
+) -> dict:
+    """LLM proposes a merge plan for two duplicate pages. Plan-only — does NOT
+    write any files. Returns a `plan_id` (cached for 5 min) plus the actions
+    the frontend renders as a diff preview before the user confirms apply.
+
+    Raises ValueError if the issue does not reference a second page or the
+    LLM picks invalid primary/secondary paths.
+    """
+    _gc_repair_plans()
+    issue = issue or {}
+    page_a = (issue.get("page") or "").strip()
+    if not page_a:
+        raise ValueError("issue.page required")
+    detail = (issue.get("detail") or "").strip()
+    suggested_fix = (issue.get("suggested_fix") or "").strip()
+    page_b = _detect_other_page_in_text(
+        wiki_dir, page_a, f"{detail}\n{suggested_fix}"
+    )
+    if not page_b:
+        raise ValueError(
+            "could not locate the second duplicate page; lint detail must "
+            "reference its path explicitly"
+        )
+
+    pa = _safe_rel_path(page_a)
+    pb = _safe_rel_path(page_b)
+    fa = wiki_dir / pa
+    fb = wiki_dir / pb
+    if not fa.exists():
+        raise FileNotFoundError(page_a)
+    if not fb.exists():
+        raise FileNotFoundError(page_b)
+
+    content_a = fa.read_text(encoding="utf-8")
+    content_b = fb.read_text(encoding="utf-8")
+    skill_md = (wiki_dir / "SKILL.md").read_text(encoding="utf-8")
+    ctx_lines = []
+    if detail:
+        ctx_lines.append(f"detail: {detail}")
+    if suggested_fix:
+        ctx_lines.append(f"suggested_fix: {suggested_fix}")
+    lint_context = "\n".join(ctx_lines) or "(none)"
+
+    prompt = _render(
+        _load_prompt("repair-duplicate-merge"),
+        wiki_skill_md=skill_md,
+        path_a=page_a,
+        content_a=content_a,
+        path_b=page_b,
+        content_b=content_b,
+        lint_context=lint_context,
+    )
+
+    provider = cfg["active_provider"]
+    pcfg = cfg["providers"][provider]
+    res = await _llm_json(
+        provider, pcfg, system="", user=prompt, max_tokens=8192
+    )
+    data = res["data"]
+
+    primary = _strip_autolinks((data.get("primary") or "").strip())
+    secondary = _strip_autolinks((data.get("secondary") or "").strip())
+    if {primary, secondary} != {page_a, page_b}:
+        raise ValueError(
+            f"LLM picked invalid primary/secondary: "
+            f"{primary!r} / {secondary!r} (expected {page_a!r} or {page_b!r})"
+        )
+    merged_content = (data.get("merged_content") or "").strip()
+    secondary_content = (data.get("secondary_content") or "").strip()
+    if not merged_content or not secondary_content:
+        raise ValueError(
+            "LLM did not produce both merged_content and secondary_content"
+        )
+    # Normalise trailing newline for clean diffs and writes.
+    merged_content += "\n"
+    secondary_content += "\n"
+
+    primary_full = wiki_dir / _safe_rel_path(primary)
+    secondary_full = wiki_dir / _safe_rel_path(secondary)
+    actions = [
+        {
+            "path": primary,
+            "role": "primary",
+            "before": primary_full.read_text(encoding="utf-8"),
+            "after": merged_content,
+        },
+        {
+            "path": secondary,
+            "role": "secondary",
+            "before": secondary_full.read_text(encoding="utf-8"),
+            "after": secondary_content,
+        },
+    ]
+
+    plan_id = secrets.token_urlsafe(12)
+    expires_at = time.time() + _REPAIR_PLAN_TTL_SEC
+    _REPAIR_PLAN_CACHE[plan_id] = {
+        "kind": "duplicate-merge",
+        "wiki_dir": str(wiki_dir),
+        "primary": primary,
+        "secondary": secondary,
+        "actions": actions,
+        "expires_at": expires_at,
+    }
+    return {
+        "plan_id": plan_id,
+        "kind": "duplicate-merge",
+        "primary": primary,
+        "secondary": secondary,
+        "reasoning": (data.get("reasoning") or "").strip(),
+        "actions": actions,
+        "expires_at": expires_at,
+        "ttl_seconds": _REPAIR_PLAN_TTL_SEC,
+        "tokens_in": res["tokens_in"],
+        "tokens_out": res["tokens_out"],
+    }
+
+
+async def apply_repair_plan(wiki_dir: Path, plan_id: str) -> dict:
+    """Apply a previously generated plan. Snapshots old content into log.md
+    before each write so a human can manually restore. Per-wiki lock prevents
+    racing with ingest. Plan is consumed (removed from cache) on success.
+    """
+    _gc_repair_plans()
+    plan = _REPAIR_PLAN_CACHE.get(plan_id)
+    if not plan:
+        raise ValueError("plan not found or expired")
+    if plan["wiki_dir"] != str(wiki_dir):
+        raise ValueError("plan belongs to a different wiki")
+
+    applied: list[dict] = []
+    async with _lock_for(wiki_dir):
+        # Snapshot every target BEFORE writing so the log is self-contained.
+        snapshot_parts = [
+            f"apply repair plan {plan_id} ({plan['kind']}) — snapshot:"
+        ]
+        for act in plan["actions"]:
+            p = _safe_rel_path(act["path"])
+            full = wiki_dir / p
+            if full.exists():
+                snapshot_parts.append(
+                    f"--- BEFORE {act['path']} ---\n"
+                    f"{full.read_text(encoding='utf-8')}\n"
+                    f"--- END BEFORE ---"
+                )
+        append_log(wiki_dir, "\n".join(snapshot_parts))
+
+        for act in plan["actions"]:
+            _write_page(wiki_dir, act["path"], act["after"])
+            applied.append({"action": "update", "path": act["path"]})
+
+        regenerate_index(wiki_dir)
+        append_log(
+            wiki_dir,
+            f"apply repair plan {plan_id}: "
+            f"primary={plan['primary']} secondary={plan['secondary']}",
+        )
+
+    _REPAIR_PLAN_CACHE.pop(plan_id, None)
+    return {"ok": True, "plan_id": plan_id, "applied": applied}
 
 
 # ---------- Lint ----------

@@ -613,6 +613,58 @@ def wiki_repair_discuss(body: WikiRepairDiscuss, request: Request):
     }
 
 
+class WikiRepairPlan(BaseModel):
+    issue: dict
+
+
+@router.post("/wiki/repair/plan")
+async def wiki_repair_plan(body: WikiRepairPlan, request: Request):
+    """LLM-driven plan-only repair for `duplicate` lint issues. Produces a
+    diff-able merge plan that the frontend previews; the user must POST to
+    /wiki/repair/apply with the returned `plan_id` to actually write.
+    Plans live in process memory for 5 minutes.
+    """
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    cfg = cfgmod.load_config(request.app.state.config_path)
+    issue = body.issue or {}
+    category = (issue.get("category") or "").strip()
+    if category != "duplicate":
+        raise HTTPException(
+            400,
+            f"plan endpoint only supports category='duplicate' (got {category!r})",
+        )
+    try:
+        return await wikimod.plan_repair_duplicate(wiki_dir, issue, cfg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Wiki page not found: {e}")
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
+class WikiRepairApply(BaseModel):
+    plan_id: str
+
+
+@router.post("/wiki/repair/apply")
+async def wiki_repair_apply(body: WikiRepairApply, request: Request):
+    """Apply a previously planned repair. Snapshots old page content into
+    log.md before writing so a human can roll back manually if needed.
+    """
+    wiki_dir = request.app.state.wiki_dir
+    if not wikimod.is_initialized(wiki_dir):
+        raise HTTPException(404, "Wiki not initialized")
+    try:
+        return await wikimod.apply_repair_plan(wiki_dir, body.plan_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
 @router.post("/wiki/migrate/sources-plaintext")
 def wiki_migrate_sources_plaintext(request: Request):
     """One-shot migration: convert every page's `## Sources` markdown-link
