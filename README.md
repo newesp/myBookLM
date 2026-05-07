@@ -64,7 +64,7 @@ myBookLM/
 │   ├── index.html
 │   ├── styles.css
 │   └── app.js
-├── books/              # Place PDF files here (excluded from git)
+├── raw_data/           # Place PDF files here (excluded from git)
 ├── resources/          # Generated sources from PDFs (excluded from git)
 ├── wiki/               # LLM-managed wiki (excluded from git, lazy-init on first ingest)
 └── data/               # SQLite DB + config.json (excluded from git)

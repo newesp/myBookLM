@@ -9,8 +9,8 @@ __pycache__/
 data/
 
 # User content — PDFs, generated sources, and the LLM Wiki
-books/*
-!books/.gitkeep
+raw_data/*
+!raw_data/.gitkeep
 resources/
 wiki/
 

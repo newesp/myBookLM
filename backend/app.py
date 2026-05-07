@@ -8,7 +8,7 @@ from . import db, routes
 
 
 def create_app(root: Path) -> FastAPI:
-    books_dir = root / "books"
+    books_dir = root / "raw_data"
     resources_dir = root / "resources"
     wiki_dir = root / "wiki"
     data_dir = root / "data"

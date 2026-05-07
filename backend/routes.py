@@ -228,7 +228,7 @@ def list_jobs():
 async def create_job(body: StartJob, request: Request):
     pdf_path = request.app.state.books_dir / body.pdf_filename
     if not pdf_path.exists():
-        raise HTTPException(404, "PDF not found in books/")
+        raise HTTPException(404, "PDF not found in raw_data/")
     cfg = cfgmod.load_config(request.app.state.config_path)
     provider = cfg["active_provider"]
     pcfg = cfg["providers"][provider]
@@ -254,7 +254,7 @@ async def create_job(body: StartJob, request: Request):
 async def create_embed_job(body: StartJob, request: Request):
     pdf_path = request.app.state.books_dir / body.pdf_filename
     if not pdf_path.exists():
-        raise HTTPException(404, "PDF not found in books/")
+        raise HTTPException(404, "PDF not found in raw_data/")
     cfg = cfgmod.load_config(request.app.state.config_path)
     ollama_cfg = cfg["providers"]["ollama"]
 

@@ -1625,7 +1625,7 @@ async function loadPDFs() {
   const ul = $("#pdf-list");
   ul.innerHTML = "";
   if (state.pdfs.length === 0) {
-    ul.innerHTML = '<li style="color:#999;">books/ 目錄中沒有 PDF 檔案。</li>';
+    ul.innerHTML = '<li style="color:#999;">raw_data/ 目錄中沒有 PDF 檔案。</li>';
     return;
   }
   state.pdfs.forEach((p) => {
@@ -1689,13 +1689,10 @@ async function loadPDFs() {
       } catch (e) {
         alert(errLabel + "：" + e.message);
       } finally {
-        // Restore buttons regardless of outcome — the job is created (or failed
-        // to be created); whatever happens next belongs to the jobs panel.
-        btns.forEach((b) => (b.disabled = false));
-        btnClicked.textContent = origLabel;
-        btnClicked.classList.remove("loading");
-        loadJobs();
-        loadPDFs();
+        // Await both refreshes so the spinner stays visible until the UI
+        // is fully updated; loadPDFs re-creates fresh DOM buttons (no
+        // need to manually re-enable the old references).
+        await Promise.all([loadJobs(), loadPDFs()]);
       }
     };
     const skillBtn = li.querySelector("[data-action=skill]");
