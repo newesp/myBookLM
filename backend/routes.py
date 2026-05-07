@@ -524,6 +524,43 @@ async def wiki_ingest_qa(body: WikiIngestQA, request: Request):
         raise HTTPException(500, f"{type(e).__name__}: {e}")
 
 
+class WikiIngestSource(BaseModel):
+    slug: str
+
+
+@router.get("/wiki/ingest/source/preview")
+def wiki_ingest_source_preview(slug: str, request: Request):
+    """Cheap pre-flight count of how many ingest chunks a source would
+    produce. Used by the frontend confirm dialog. No LLM cost.
+    """
+    src = sources.get_source_content(request.app.state.resources_dir, slug)
+    if not src.get("types"):
+        raise HTTPException(404, f"source not found: {slug}")
+    n = wikimod.count_source_chunks(src, slug)
+    return {"slug": slug, "name": src.get("name") or slug,
+            "types": src.get("types") or [], "chunk_count": n}
+
+
+@router.post("/wiki/ingest/source")
+async def wiki_ingest_source(body: WikiIngestSource, request: Request):
+    """Chunked ingest of an existing source's full content into the wiki.
+    Each chunk = 1 Plan + N Apply LLM calls; cost scales linearly. Frontend
+    is expected to confirm with the user (chunk count from preview endpoint).
+    """
+    cfg = cfgmod.load_config(request.app.state.config_path)
+    src = sources.get_source_content(request.app.state.resources_dir, body.slug)
+    if not src.get("types"):
+        raise HTTPException(404, f"source not found: {body.slug}")
+    try:
+        return await wikimod.ingest_source(
+            request.app.state.wiki_dir, body.slug, src, cfg,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
 @router.post("/wiki/lint")
 def wiki_lint(request: Request):
     """Cheap structural lint. No LLM cost — runs synchronously."""

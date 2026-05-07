@@ -162,6 +162,8 @@ wiki/
 | GET | `/wiki/log` | Raw `log.md` content |
 | POST | `/wiki/init` | Manually scaffold the wiki (otherwise auto-init on first ingest) |
 | POST | `/wiki/ingest/qa` | `{question, answer}` → run Plan + Apply, regen index, append log |
+| GET | `/wiki/ingest/source/preview?slug=...` | Pre-flight count of how many chunks an existing source would produce. No LLM cost |
+| POST | `/wiki/ingest/source` | `{slug}` → chunked ingest of an existing skill.md or embedding source's full content. One Plan+Apply pass per chunk |
 | POST | `/wiki/lint` | Cheap structural lint (broken links, orphans, missing sections, empty pages) — no LLM cost |
 | POST | `/wiki/lint/llm` | LLM-based semantic lint (duplicates, contradictions, stale claims) — costs tokens |
 | POST | `/wiki/fix-broken-link` | `{from_path, to_path}` → unlinks every broken `[text](to)` in the page, keeping the visible text |

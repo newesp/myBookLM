@@ -1362,6 +1362,7 @@ function openSourceMenu(anchor, source) {
   menu.innerHTML = `
     <button data-a="rename">✎ 重新命名</button>
     <button data-a="topics">🏷 主題分類…</button>
+    <button data-a="ingest-wiki">📖 灌入 Wiki</button>
     ${deleteButtons}`;
   menu.addEventListener("click", (e) => e.stopPropagation());
   menu.querySelector("[data-a=rename]").addEventListener("click", async () => {
@@ -1378,6 +1379,48 @@ function openSourceMenu(anchor, source) {
   menu.querySelector("[data-a=topics]").addEventListener("click", async () => {
     closeSourceMenu();
     await openSourceTopicsDialog(source);
+  });
+  menu.querySelector("[data-a=ingest-wiki]").addEventListener("click", async () => {
+    closeSourceMenu();
+    let preview;
+    try {
+      preview = await api(
+        `/wiki/ingest/source/preview?slug=${encodeURIComponent(source.slug)}`
+      );
+    } catch (err) {
+      alert("查詢來源資訊失敗：" + err.message);
+      return;
+    }
+    const n = preview.chunk_count;
+    if (!n) {
+      alert("此來源沒有可灌入的內容。");
+      return;
+    }
+    if (!confirm(
+      `📖 把「${preview.name}」灌入 Wiki？\n\n` +
+      `來源類型：${preview.types.join(", ")}\n` +
+      `chunk 數：${n}\n\n` +
+      `每個 chunk 會跑 1 次 Plan + N 次 Apply LLM 呼叫，` +
+      `總共預估 ${n}-${n * 4} 次 LLM 呼叫，視主題複雜度而定。\n` +
+      `成本可能不低，建議先在 Settings 切到便宜的 model（如 Gemini Flash）。\n\n` +
+      `要繼續嗎？（過程中無法中斷）`
+    )) return;
+    try {
+      const res = await api("/wiki/ingest/source", {
+        method: "POST", body: { slug: source.slug },
+      });
+      alert(
+        `✓ 灌入完成\n` +
+        `  來源：${res.name}\n` +
+        `  chunks 處理：${res.chunks_total}\n` +
+        `  新增頁：${res.creates}\n` +
+        `  更新頁：${res.updates}\n` +
+        `  tokens：${res.tokens_in} in / ${res.tokens_out} out`
+      );
+      await loadSources();
+    } catch (err) {
+      alert("灌入 Wiki 失敗：" + err.message);
+    }
   });
   const partialDelete = async (kind, label) => {
     closeSourceMenu();

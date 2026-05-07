@@ -519,6 +519,187 @@ async def ingest_qa(wiki_dir: Path, question: str, answer: str, cfg: dict) -> di
     return await _ingest(wiki_dir, "qa", new_content, cfg, log_tag=question[:60])
 
 
+# ---------- Source-to-Wiki ingest ----------
+
+# Per-ingest-call budget. Each chunk becomes one Plan + N Apply round-trip,
+# so this caps prompt size to keep latency / cost predictable. ~3k tokens.
+SOURCE_INGEST_CHUNK_BUDGET = 12000
+
+
+def _split_long_text(text: str, budget: int) -> list[str]:
+    """Split on paragraph boundaries, keeping chunks roughly under `budget`
+    chars. Used when a single chapter is too big for one ingest call.
+    """
+    if len(text) <= budget:
+        return [text]
+    paragraphs = text.split("\n\n")
+    chunks: list[str] = []
+    buf: list[str] = []
+    cur = 0
+    for para in paragraphs:
+        plen = len(para) + 2  # +2 for the "\n\n" separator
+        if cur + plen > budget and buf:
+            chunks.append("\n\n".join(buf))
+            buf, cur = [para], plen
+        else:
+            buf.append(para)
+            cur += plen
+    if buf:
+        chunks.append("\n\n".join(buf))
+    return chunks
+
+
+def _chapter_section_id(filename: str) -> str:
+    """`chapters/01-foo.md` → `§01`. Falls back to the bare stem otherwise."""
+    stem = Path(filename).stem
+    m = re.match(r"^(\d+)", stem)
+    return f"§{m.group(1)}" if m else f"§{stem}"
+
+
+def _source_to_chunks(source: dict, slug: str) -> list[dict]:
+    """Turn a source (`sources.get_source_content` output) into ingest chunks.
+
+    For skill.md sources, one chunk per chapter (further split if a chapter
+    exceeds the budget). For embedding-only sources, consecutive DB chunks
+    are grouped until ~budget chars per group.
+
+    Each chunk: `{label, citation, content}` where `citation` is the suggested
+    `## Sources` line for any wiki page synthesised from this chunk.
+    """
+    chunks: list[dict] = []
+    skill = source.get("skill")
+    if skill:
+        for ch in skill.get("chapters") or []:
+            section = _chapter_section_id(ch["filename"])
+            citation = f'{slug} {section} "{ch["title"]}"'
+            sub_chunks = _split_long_text(ch["content"], SOURCE_INGEST_CHUNK_BUDGET)
+            multi = len(sub_chunks) > 1
+            for sub_idx, body in enumerate(sub_chunks):
+                label = (
+                    f"{ch['filename']} part {sub_idx + 1}/{len(sub_chunks)}"
+                    if multi else ch["filename"]
+                )
+                chunks.append({
+                    "label": label, "citation": citation, "content": body,
+                })
+        return chunks
+
+    emb = source.get("embedding")
+    if emb:
+        rows = emb.get("chunks") or []  # pre-sorted by chunk_idx
+        buf: list[dict] = []
+        buf_len = 0
+        first_idx = None
+        for r in rows:
+            if first_idx is None:
+                first_idx = r["idx"]
+            text_len = len(r["text"])
+            if buf_len + text_len > SOURCE_INGEST_CHUNK_BUDGET and buf:
+                last_idx = buf[-1]["idx"]
+                label = f"chunks {first_idx}-{last_idx}"
+                chunks.append({
+                    "label": label,
+                    "citation": f"{slug} {label}",
+                    "content": "\n\n".join(b["text"] for b in buf),
+                })
+                buf, buf_len, first_idx = [r], text_len, r["idx"]
+            else:
+                buf.append(r)
+                buf_len += text_len
+        if buf:
+            last_idx = buf[-1]["idx"]
+            label = f"chunks {first_idx}-{last_idx}"
+            chunks.append({
+                "label": label,
+                "citation": f"{slug} {label}",
+                "content": "\n\n".join(b["text"] for b in buf),
+            })
+    return chunks
+
+
+def _format_source_chunk(slug: str, source_name: str, chunk: dict) -> str:
+    """Render the prompt-side `new_content` block for one source chunk."""
+    return (
+        f"### Source\n"
+        f"- slug: `{slug}`\n"
+        f"- name: {source_name}\n"
+        f"- segment: {chunk['label']}\n\n"
+        f"### Suggested `## Sources` citation (plain text, no markdown links)\n"
+        f"- {chunk['citation']}\n\n"
+        f"### Content\n\n"
+        f"{chunk['content']}"
+    )
+
+
+def count_source_chunks(source: dict, slug: str) -> int:
+    """Pre-flight count for the frontend confirm dialog. No LLM cost."""
+    return len(_source_to_chunks(source, slug))
+
+
+async def ingest_source(
+    wiki_dir: Path, slug: str, source: dict, cfg: dict,
+) -> dict:
+    """Chunked ingest of an existing source. Each chunk is one full Plan +
+    Apply pass, so cost scales linearly with chunk count. Caller is expected
+    to have warned the user.
+
+    `source` is the dict returned by `sources.get_source_content()` — we take
+    it as a parameter rather than importing `sources` to keep the dependency
+    direction clean (sources doesn't depend on wiki and shouldn't either way).
+    """
+    initialize(wiki_dir)
+    if not source.get("types"):
+        raise ValueError(f"source has no content: {slug}")
+    name = source.get("name") or slug
+    chunks = _source_to_chunks(source, slug)
+    if not chunks:
+        raise ValueError(f"source has no chunkable content: {slug}")
+
+    tokens_in = 0
+    tokens_out = 0
+    aggregated_ops: list[dict] = []
+    chunk_results: list[dict] = []
+
+    for i, ch in enumerate(chunks):
+        new_content = _format_source_chunk(slug, name, ch)
+        log_tag = f"source={slug} {ch['label']} ({i + 1}/{len(chunks)})"
+        result = await _ingest(
+            wiki_dir, "source", new_content, cfg, log_tag=log_tag,
+        )
+        tokens_in += result.get("tokens_in", 0)
+        tokens_out += result.get("tokens_out", 0)
+        ops = result.get("operations", []) or []
+        aggregated_ops.extend(ops)
+        chunk_results.append({
+            "label": ch["label"],
+            "operations": ops,
+            "tokens_in": result.get("tokens_in", 0),
+            "tokens_out": result.get("tokens_out", 0),
+        })
+
+    creates = sum(1 for o in aggregated_ops if o.get("action") == "create")
+    updates = sum(1 for o in aggregated_ops if o.get("action") == "update")
+    append_log(
+        wiki_dir,
+        f"ingest source slug={slug!r} chunks={len(chunks)} "
+        f"creates={creates} updates={updates} "
+        f"tokens_in={tokens_in} tokens_out={tokens_out}",
+    )
+
+    return {
+        "ok": True,
+        "slug": slug,
+        "name": name,
+        "chunks_total": len(chunks),
+        "operations": aggregated_ops,
+        "creates": creates,
+        "updates": updates,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "chunks": chunk_results,
+    }
+
+
 async def _ingest(wiki_dir: Path, ingest_type: str, new_content: str, cfg: dict, log_tag: str) -> dict:
     """Run Plan + Apply + index/log update. Returns summary dict."""
     provider = cfg["active_provider"]
