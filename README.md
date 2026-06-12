@@ -1,6 +1,6 @@
 # myBookLM
 
-A local alternative to NotebookLM. Convert PDFs into conversational knowledge sources with support for multiple AI providers.
+A local alternative to NotebookLM. The purpose is not to replicate NotebookLM’s functionality, but rather to enable choosing different AI providers for information retrieval and answering questions.
 
 ## Features
 
