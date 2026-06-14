@@ -19,7 +19,14 @@ A local alternative to NotebookLM. The purpose is not to replicate NotebookLM’
 **Requirements**: Python 3.10+, [Ollama](https://ollama.com) (for local inference and embedding)
 
 ```bash
-# 1. Install Python dependencies
+# 1. Install Python dependencies (choose one)
+
+# Option A: Conda (recommended)
+conda create --name myBookLm python=3.11 -y
+conda activate myBookLm
+pip install -r requirements.txt
+
+# Option B: venv
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 # source .venv/bin/activate   # macOS / Linux
