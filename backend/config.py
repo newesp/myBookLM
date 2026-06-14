@@ -29,6 +29,13 @@ DEFAULT_CONFIG = {
             "context_chars_limit": 100000,
             "pricing": {"input_per_mtok": 2.0, "output_per_mtok": 10.0},
         },
+        "openai": {
+            "api_key": "",
+            "base_url": "https://api.openai.com/v1",
+            "model": "gpt-4o-mini",
+            "context_chars_limit": 250000,
+            "pricing": {"input_per_mtok": 0.15, "output_per_mtok": 0.60},
+        },
         "ollama": {
             "base_url": "http://localhost:11434",
             "model": "llama3.1",

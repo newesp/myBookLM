@@ -24,9 +24,47 @@ async def chat(
         return await _gemini(pcfg, messages, system, max_tokens, json_mode)
     if provider == "grok":
         return await _grok(pcfg, messages, system, max_tokens, json_mode)
+    if provider == "openai":
+        return await _openai(pcfg, messages, system, max_tokens, json_mode)
     if provider == "ollama":
         return await _ollama(pcfg, messages, system, max_tokens, json_mode)
     raise LLMError(f"Unknown provider: {provider}")
+
+
+async def _openai(cfg, messages, system, max_tokens, json_mode):
+    api_key = cfg.get("api_key") or ""
+    if not api_key:
+        raise LLMError("OpenAI API key not set")
+    full = []
+    if system:
+        full.append({"role": "system", "content": system})
+    full.extend(messages)
+    payload = {
+        "model": cfg.get("model", "gpt-4o-mini"),
+        "messages": full,
+        "max_tokens": max_tokens,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    base_url = (cfg.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+    async with httpx.AsyncClient(timeout=600) as client:
+        r = await client.post(
+            f"{base_url}/chat/completions", headers=headers, json=payload
+        )
+    if r.status_code != 200:
+        raise LLMError(f"OpenAI error {r.status_code}: {r.text[:500]}")
+    data = r.json()
+    content = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    return {
+        "content": content,
+        "tokens_in": usage.get("prompt_tokens", 0),
+        "tokens_out": usage.get("completion_tokens", 0),
+    }
 
 
 async def _claude(cfg, messages, system, max_tokens):

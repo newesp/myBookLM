@@ -1879,7 +1879,7 @@ async function loadConfig() {
 }
 $("#save-settings").addEventListener("click", async () => {
   const payload = { active_provider: $("#active-provider").value, providers: {}, wiki: {} };
-  ["claude", "gemini", "grok", "ollama"].forEach((name) => {
+  ["claude", "gemini", "grok", "ollama", "openai"].forEach((name) => {
     const obj = {};
     $$(`[data-p="${name}"]`).forEach((input) => {
       const f = input.dataset.f;
