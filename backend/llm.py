@@ -1,4 +1,4 @@
-"""Unified async chat() across Claude / Gemini / Grok / Ollama.
+"""Unified async chat() across Claude / Gemini / Grok / OpenAI / Ollama.
 
 Each returns a dict: {content, tokens_in, tokens_out}.
 """

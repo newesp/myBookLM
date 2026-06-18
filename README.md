@@ -10,7 +10,7 @@ A local alternative to NotebookLM. The purpose is not to replicate NotebookLM’
 - **LLM Wiki**: An LLM-managed knowledge layer (concept / entity / summary / compare / synthesis pages) sitting on top of raw resources. Click 📖 存入 Wiki on any AI reply to file the Q&A back as wiki pages; check the pinned wiki entry in the source list to query it. No embeddings — the LLM navigates by reading `index.md` and following links. Powered by the [llm-wiki skill](backend/skills/llm-wiki/) which is portable to other projects.
 - **Save as source**: Save any AI reply as a new mini skill.md source
 - **Topics**: Group sources by topic — pick a topic in the sidebar to scope the source list and conversation history; sources can belong to multiple topics
-- **Multiple AI providers**: Claude / Gemini / Grok / Ollama (local) — switchable at any time
+- **Multiple AI providers**: Claude / Gemini / Grok / OpenAI (ChatGPT) / Ollama (local) — switchable at any time
 - **Conversation management**: Multiple conversations, clear history, token and cost display per message
 - **Job management**: Conversions can be paused, resumed, and deleted (single or bulk-clear all completed log rows); resumes automatically from the last completed chapter after restart
 
@@ -58,7 +58,7 @@ myBookLM/
 │   ├── chat.py         # RAG logic (skill.md full-text + embedding top-k + wiki two-pass)
 │   ├── conversion.py   # PDF → skill.md pipeline (multi-step LLM)
 │   ├── embedding.py    # PDF → embedding (Ollama nomic-embed-text)
-│   ├── llm.py          # Unified LLM interface (4 providers)
+│   ├── llm.py          # Unified LLM interface (5 providers)
 │   ├── sources.py      # Source listing and deletion (clears DB chunks too)
 │   ├── topics.py       # Topic CRUD + many-to-many source membership
 │   ├── wiki.py         # LLM Wiki: ingest (Plan+Apply), Pass 1 page picking, info
@@ -120,8 +120,9 @@ Fill in API keys, select models, and adjust context limits in the Settings tab. 
 | Use case | Recommendation |
 |----------|----------------|
 | PDF → skill.md conversion | Claude claude-opus-4-5 / Gemini Flash |
-| Everyday chat (cost-conscious) | Gemini Flash / Grok |
+| Everyday chat (cost-conscious) | Gemini Flash / Grok / OpenAI gpt-4o-mini |
 | Fully local (privacy) | Ollama qwen2.5:7b (needs ~4 GB free RAM) |
+| OpenAI-compatible services | OpenAI provider with custom `base_url` |
 | Embedding (required) | Ollama nomic-embed-text (free, local) |
 
 ## RAG strategy
@@ -173,7 +174,7 @@ wiki/
 | POST | `/wiki/repair/plan` | `{issue}` (duplicate only) → LLM produces a plan-only merge proposal: picks primary/secondary and writes `merged_content` + redirect stub. Returns `{plan_id, primary, secondary, actions[], reasoning, ...}`. Cached 5 min, no files modified — costs tokens |
 | POST | `/wiki/repair/apply` | `{plan_id}` → apply a planned repair, snapshotting old page contents into `log.md` first. Single-use; plan is consumed on success |
 
-**Cost note**: Each `📖 存入 Wiki` typically runs 1 Plan call + 2–4 Apply calls (one per page). Use a cheaper model in Settings if budget-sensitive — the Plan/Apply prompts are language-neutral and work with all four providers.
+**Cost note**: Each `📖 存入 Wiki` typically runs 1 Plan call + 2–4 Apply calls (one per page). Use a cheaper model in Settings if budget-sensitive — the Plan/Apply prompts are language-neutral and work with all five providers.
 
 **Reusing the skill**: `backend/skills/llm-wiki/` is a vendored copy of `~/.claude/skills/llm-wiki/`. It contains `SKILL.md`, reference docs, prompt templates, and starter file templates — language-neutral, so any project can vendor it and write its own runtime against the same prompts.
 
