@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  smoke:
+    name: Python and frontend smoke checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile Python sources
+        run: python -B -m compileall -q .
+
+      - name: Import FastAPI app
+        run: |
+          python -B -c "from pathlib import Path; from backend.app import create_app; app = create_app(Path('.').resolve()); print(app.title); print(len(app.routes))"
+
+      - name: Check frontend JavaScript syntax
+        run: node --check frontend/app.js

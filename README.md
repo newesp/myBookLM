@@ -47,6 +47,10 @@ python app.py
 
 Open **http://127.0.0.1:8765** in your browser.
 
+## Continuous Integration
+
+GitHub Actions runs on pull requests and pushes to `main`. The CI job installs Python dependencies, compiles the Python sources, smoke-imports the FastAPI app, and checks the frontend JavaScript syntax.
+
 ## Project Structure
 
 ```
