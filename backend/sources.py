@@ -4,6 +4,58 @@ from pathlib import Path
 
 from . import db
 
+_INVALID_SEGMENT_CHARS = set('/\\:*?"<>|')
+
+
+def validate_slug(slug: str) -> str:
+    """Return a safe source slug path segment or raise ValueError."""
+    slug = (slug or "").strip()
+    if (
+        not slug
+        or slug in (".", "..")
+        or ".." in slug
+        or any(ch in _INVALID_SEGMENT_CHARS or ord(ch) < 32 for ch in slug)
+    ):
+        raise ValueError("Invalid source slug")
+    return slug
+
+
+def source_path(resources_dir: Path, slug: str) -> Path:
+    """Resolve a source slug under resources_dir and reject path traversal."""
+    safe_slug = validate_slug(slug)
+    root = resources_dir.resolve()
+    candidate = (root / safe_slug).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError("Invalid source slug")
+    return candidate
+
+
+def source_exists(resources_dir: Path, slug: str) -> bool:
+    """Return True if a source slug has files, chunks, or a PDF link."""
+    slug = validate_slug(slug)
+    if source_path(resources_dir, slug).exists():
+        return True
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM chunks WHERE source_slug=? LIMIT 1", (slug,)
+        ).fetchone()
+        if row:
+            return True
+        row = c.execute("SELECT 1 FROM source_pdf WHERE slug=? LIMIT 1", (slug,)).fetchone()
+    return bool(row)
+
+
+def unique_source_slug(resources_dir: Path, base_slug: str) -> str:
+    """Return base_slug or a suffixed slug that does not collide with existing data."""
+    base = validate_slug(base_slug)[:60] or "source"
+    candidate = base
+    suffix = 2
+    while source_exists(resources_dir, candidate):
+        trim = 60 - len(f"-{suffix}")
+        candidate = f"{base[:trim]}-{suffix}"
+        suffix += 1
+    return candidate
+
 
 def list_sources(resources_dir: Path, topic_id: int | None = None) -> list[dict]:
     """List sources, optionally filtered to those belonging to a topic.
@@ -102,8 +154,9 @@ def get_source_content(resources_dir: Path, slug: str) -> dict:
     - embedding: all chunks with idx + text
     Either/both can be present depending on source types.
     """
+    slug = validate_slug(slug)
     result: dict = {"slug": slug, "name": slug, "types": [], "skill": None, "embedding": None}
-    sub = resources_dir / slug
+    sub = source_path(resources_dir, slug)
     if sub.exists() and sub.is_dir():
         skill_md = sub / "SKILL.md"
         if skill_md.exists():
@@ -151,7 +204,8 @@ def get_source_content(resources_dir: Path, slug: str) -> dict:
 
 def rename_source(resources_dir: Path, slug: str, new_name: str) -> bool:
     """Update the display name. Slug/directory is NOT changed (it's the primary key)."""
-    sub = resources_dir / slug
+    slug = validate_slug(slug)
+    sub = source_path(resources_dir, slug)
     if not sub.exists() or not sub.is_dir():
         # Embedding-only with no directory: store name in META.json in the skills dir
         sub.mkdir(parents=True, exist_ok=True)
@@ -193,7 +247,8 @@ def delete_source(resources_dir: Path, slug: str, kind: str | None = None) -> bo
     meaning when either layer survives).
     """
     import shutil
-    target = resources_dir / slug
+    slug = validate_slug(slug)
+    target = source_path(resources_dir, slug)
     deleted_files = False
 
     if kind in (None, "all", "skill"):
@@ -218,6 +273,7 @@ def link_source_pdf(slug: str, pdf_filename: str) -> None:
     """
     if not slug or not pdf_filename:
         return
+    slug = validate_slug(slug)
     with db.conn() as c:
         c.execute(
             "INSERT INTO source_pdf (slug, pdf_filename, created_at) "
@@ -229,7 +285,7 @@ def link_source_pdf(slug: str, pdf_filename: str) -> None:
 
 
 def list_pdfs(books_dir: Path, resources_dir: Path) -> list[dict]:
-    """List PDFs in books/, each annotated with its derived sources.
+    """List PDFs in raw_data/, each annotated with its derived sources.
 
     A "derived source" is a row in source_pdf whose pdf_filename matches.
     For each one we look up whether the source actually still exists (skill

@@ -15,9 +15,9 @@ You are auditing an LLM Wiki for structural and content issues.
 {{pages_dump}}
 
 <!--
-  When the wiki is too large to fit, the application will sample a subset
-  (e.g. all index entries + N random pages + all pages with no inbound links).
-  Treat omitted pages as out-of-scope rather than nonexistent.
+  When the wiki is too large to fit, the application includes pages in
+  catalog order until the dump budget is exhausted. Treat omitted pages as
+  out-of-scope rather than nonexistent.
 -->
 
 ## Your task

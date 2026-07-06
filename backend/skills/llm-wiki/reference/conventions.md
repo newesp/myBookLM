@@ -38,12 +38,16 @@ Every page should have:
 
 ## Sources
 
-- [<source-slug>](../summary/<source-slug>.md) — page 42, "section title"
-- [<source-slug-2>](../summary/<source-slug-2>.md) — chapter 3
+- <source-slug> — page 42, "section title"
+- <source-slug-2> — chapter 3
 ```
 
 The blockquote with Type/Aliases/Related and the closing `## Sources` section
 are required. Body sections in between are free-form.
+
+Sources entries are plain text references to raw resources by stable source
+slug and page/chapter details. Do not use markdown links in `## Sources`;
+cross-page links belong in the body or `Related` line.
 
 ## Cross-references
 

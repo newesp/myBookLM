@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import llm
+from .json_utils import parse_llm_json, strip_code_fence
 
 PAGE_TYPES = ("concept", "entity", "summary", "compare", "synthesis")
 TYPE_TITLES = {
@@ -434,15 +435,6 @@ def _skill_schema_version() -> str:
 
 # ---------- LLM helpers ----------
 
-def _strip_code_fence(text: str) -> str:
-    """Remove a leading ```json ... ``` fence if present."""
-    s = text.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```(?:json)?\s*\n", "", s)
-        s = re.sub(r"\n```\s*$", "", s)
-    return s.strip()
-
-
 async def _llm_json(
     provider: str, pcfg: dict, system: str, user: str, max_tokens: int = 2048,
 ) -> dict:
@@ -460,9 +452,9 @@ async def _llm_json(
         max_tokens=max_tokens,
         json_mode=True,
     )
-    raw = _strip_code_fence(result.get("content", ""))
+    raw = strip_code_fence(result.get("content", ""))
     try:
-        parsed = json.loads(raw)
+        parsed = parse_llm_json(raw)
     except json.JSONDecodeError as e:
         # Truncation gives "Unterminated string" — point the user at max_tokens.
         hint = ""
@@ -1580,8 +1572,8 @@ async def llm_lint(wiki_dir: Path, cfg: dict) -> dict:
         "exists": True,
         "issues": issues,
         "summary": summary,
-        "tokens_in": res["tokens_in"],
-        "tokens_out": res["tokens_out"],
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
         "pages_scanned": scanned,
         "pages_total": len(pages),
         "truncated": truncated,

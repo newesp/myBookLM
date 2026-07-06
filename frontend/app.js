@@ -1160,7 +1160,7 @@ function hookLintActions(container, body, contentEl) {
 function renderWikiIndexInto(container, indexMd) {
   container.classList.add("wiki-index-md");
   container.classList.remove("wiki-page-md");
-  container.innerHTML = marked.parse(indexMd);
+  container.innerHTML = renderMarkdown(indexMd);
   hookWikiLinks(container);
 }
 
@@ -1196,7 +1196,7 @@ async function renderWikiPageInto(container, path) {
   container.innerHTML = `
     <button class="wiki-back-btn">← 回 Index</button>
     <div class="wiki-page-path">${escapeHtml(path)}</div>
-    <div class="wiki-page-body">${marked.parse(r.content || "")}</div>`;
+    <div class="wiki-page-body">${renderMarkdown(r.content || "")}</div>`;
   renderBack();
   hookWikiLinks(container, path);
 }
@@ -1604,9 +1604,49 @@ function openMessageModal(content) {
 
 function renderMarkdown(md) {
   if (window.marked) {
-    try { return window.marked.parse(md); } catch {}
+    try { return sanitizeRenderedHtml(window.marked.parse(md)); } catch {}
   }
   return `<pre>${escapeHtml(md)}</pre>`;
+}
+
+function sanitizeRenderedHtml(html) {
+  const doc = new DOMParser().parseFromString(`<template>${html}</template>`, "text/html");
+  const template = doc.querySelector("template");
+  const blockedTags = new Set([
+    "script", "style", "link", "meta", "base", "iframe", "object", "embed",
+    "form", "input", "button", "textarea", "select", "option", "img", "svg",
+    "math",
+  ]);
+  template.content.querySelectorAll("*").forEach((el) => {
+    if (blockedTags.has(el.tagName.toLowerCase())) {
+      el.remove();
+      return;
+    }
+    [...el.attributes].forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.trim().toLowerCase();
+      if (
+        name.startsWith("on") ||
+        name === "style" ||
+        name === "srcdoc" ||
+        ((name === "href" || name === "src") && !isSafeUrl(value))
+      ) {
+        el.removeAttribute(attr.name);
+      }
+    });
+    if (el.tagName.toLowerCase() === "a") {
+      el.setAttribute("rel", "noopener noreferrer");
+      el.setAttribute("target", "_blank");
+    }
+  });
+  return template.innerHTML;
+}
+
+function isSafeUrl(value) {
+  if (!value || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  if (value.startsWith("#") || value.startsWith("/") && !value.startsWith("//")) return true;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) return true;
+  return /^(https?:|mailto:)/i.test(value);
 }
 
 // ---------- Conversations ----------
@@ -2118,6 +2158,9 @@ async function loadConfig() {
         val = pcfg[f];
       }
       input.value = val ?? "";
+      if (f === "api_key" && pcfg.has_api_key) {
+        input.placeholder = "已儲存；留白則保留既有 key";
+      }
     });
   });
   // Wiki block

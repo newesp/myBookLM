@@ -3,11 +3,20 @@
 Each returns a dict: {content, tokens_in, tokens_out}.
 """
 import httpx
+import asyncio
 from typing import Optional
 
 
 class LLMError(Exception):
     pass
+
+
+def _upstream_error(provider: str, status_code: int) -> LLMError:
+    if provider == "Gemini" and status_code == 503:
+        return LLMError(
+            "Gemini error 503: service temporarily overloaded or out of capacity; retry later or switch Gemini model"
+        )
+    return LLMError(f"{provider} error {status_code}: upstream request failed")
 
 
 async def chat(
@@ -56,7 +65,7 @@ async def _openai(cfg, messages, system, max_tokens, json_mode):
             f"{base_url}/chat/completions", headers=headers, json=payload
         )
     if r.status_code != 200:
-        raise LLMError(f"OpenAI error {r.status_code}: {r.text[:500]}")
+        raise _upstream_error("OpenAI", r.status_code)
     data = r.json()
     content = data["choices"][0]["message"]["content"]
     usage = data.get("usage", {})
@@ -88,7 +97,7 @@ async def _claude(cfg, messages, system, max_tokens):
             "https://api.anthropic.com/v1/messages", headers=headers, json=payload
         )
     if r.status_code != 200:
-        raise LLMError(f"Claude error {r.status_code}: {r.text[:500]}")
+        raise _upstream_error("Claude", r.status_code)
     data = r.json()
     content = "".join(
         b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
@@ -120,9 +129,16 @@ async def _gemini(cfg, messages, system, max_tokens, json_mode):
     if json_mode:
         payload["generationConfig"]["responseMimeType"] = "application/json"
     async with httpx.AsyncClient(timeout=600) as client:
-        r = await client.post(url, json=payload)
+        r = None
+        for attempt in range(3):
+            r = await client.post(url, json=payload)
+            if r.status_code not in (503, 504):
+                break
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+        assert r is not None
     if r.status_code != 200:
-        raise LLMError(f"Gemini error {r.status_code}: {r.text[:500]}")
+        raise _upstream_error("Gemini", r.status_code)
     data = r.json()
     try:
         content = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -160,7 +176,7 @@ async def _grok(cfg, messages, system, max_tokens, json_mode):
             "https://api.x.ai/v1/chat/completions", headers=headers, json=payload
         )
     if r.status_code != 200:
-        raise LLMError(f"Grok error {r.status_code}: {r.text[:500]}")
+        raise _upstream_error("Grok", r.status_code)
     data = r.json()
     content = data["choices"][0]["message"]["content"]
     usage = data.get("usage", {})
@@ -191,7 +207,7 @@ async def _ollama(cfg, messages, system, max_tokens, json_mode):
     async with httpx.AsyncClient(timeout=600) as client:
         r = await client.post(f"{base_url}/api/chat", json=payload)
     if r.status_code != 200:
-        raise LLMError(f"Ollama error {r.status_code}: {r.text[:500]}")
+        raise _upstream_error("Ollama", r.status_code)
     data = r.json()
     content = data.get("message", {}).get("content", "")
     return {
