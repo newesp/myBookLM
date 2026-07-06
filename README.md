@@ -115,6 +115,12 @@ Sources can be grouped into topics so you can keep separate domains (e.g. 投資
 
 Fill in API keys, select models, and adjust context limits in the Settings tab. Changes take effect immediately after saving.
 
+API keys are stored locally in `data/config.json` and are write-only through the browser API: the settings page can save or replace a key, but `GET /api/config` returns only `has_api_key`, not the key value. Leaving an API-key field blank preserves the existing key.
+
+Cloud providers receive selected source text, wiki pages, conversation history, and the current user message. Use Ollama for fully local processing when source privacy matters.
+
+PDF uploads are accepted only as basename `.pdf` files, must start with a PDF header, and are capped at 200 MB. Extraction rejects encrypted PDFs, PDFs over 1000 pages, and extracted text over 5,000,000 characters.
+
 ## Provider recommendations
 
 | Use case | Recommendation |

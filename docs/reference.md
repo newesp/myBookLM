@@ -21,6 +21,7 @@ messages: id, conversation_id, role, content,
 
 chunks: id, source_slug, chunk_idx, text, embedding BLOB
         INDEX idx_chunks_slug ON chunks(source_slug)
+        UNIQUE INDEX idx_chunks_slug_idx ON chunks(source_slug, chunk_idx)
 
 topics: id, name, created_at
         -- A "default" row is seeded by init_db (lowest id, name="預設").
@@ -37,7 +38,21 @@ source_pdf: slug PK, pdf_filename, created_at
 
 ### Migration history
 
-`job_type`, `jobs.topic_id`, `conversations.topic_id`, and `source_pdf` were added after initial release — `init_db()` runs `ALTER TABLE` migrations for existing databases, backfills any null `conversations.topic_id` to the default topic, and backfills `source_pdf` from existing job rows (`os.path.basename(jobs.pdf_path)` keyed by `jobs.skill_slug`).
+`job_type`, `jobs.topic_id`, `conversations.topic_id`, and `source_pdf` were added after initial release — `init_db()` runs `ALTER TABLE` migrations for existing databases, backfills any null `conversations.topic_id` to the default topic, backfills `source_pdf` from existing job rows (`os.path.basename(jobs.pdf_path)` keyed by `jobs.skill_slug`), deduplicates old chunk rows by `(source_slug, chunk_idx)`, and creates the unique chunk index.
+
+The DB column names `skill_slug` and `skill_dir` are legacy compatibility names. New code should treat them as source slug/source directory fields unless it specifically needs the `skill.md` source type.
+
+---
+
+## Config and local data safety
+
+`GET /api/config` returns provider settings with `api_key` blanked and `has_api_key` set. `POST /api/config` accepts a non-empty `api_key` to replace the stored key; a blank key preserves the existing value.
+
+Configurable upstream `base_url` values are constrained to official OpenAI (`https://api.openai.com/v1`) or local-only hosts for OpenAI-compatible and Ollama endpoints. This prevents accidental SSRF/key-forwarding through arbitrary remote URLs.
+
+PDF uploads must be basename `.pdf` files, start with `%PDF-`, and be at most 200 MB. PDF extraction rejects encrypted PDFs, files over 1000 pages, and extracted text over 5,000,000 characters.
+
+Source slugs are validated as safe single path segments before filesystem access. New conversion/embedding jobs use `unique_source_slug()` so reruns create `slug-2`, `slug-3`, etc. instead of mixing new output into existing files/chunks.
 
 ---
 

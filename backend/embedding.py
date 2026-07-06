@@ -36,12 +36,22 @@ def chunk_text(text: str) -> list[str]:
 
 
 async def embed_text(base_url: str, model: str, text: str) -> list[float]:
-    url = base_url.rstrip("/") + "/api/embeddings"
+    root = base_url.rstrip("/")
     async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(url, json={"model": model, "prompt": text})
+        # `/api/embed` is the current Ollama endpoint. Fall back to the older
+        # `/api/embeddings` endpoint for older local installations.
+        r = await client.post(root + "/api/embed", json={"model": model, "input": text})
+        if r.status_code == 404:
+            r = await client.post(
+                root + "/api/embeddings", json={"model": model, "prompt": text}
+            )
     if r.status_code != 200:
         raise RuntimeError(f"Ollama embedding error {r.status_code}: {r.text[:300]}")
-    return r.json()["embedding"]
+    data = r.json()
+    embeddings = data.get("embeddings")
+    if embeddings:
+        return embeddings[0]
+    return data["embedding"]
 
 
 def _pack(vec: list[float]) -> bytes:

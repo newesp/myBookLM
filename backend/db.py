@@ -117,6 +117,17 @@ def init_db(path: Path) -> None:
             "UPDATE conversations SET topic_id=? WHERE topic_id IS NULL",
             (default_id,),
         )
+        # Older versions could insert duplicate chunks when a reindex reused
+        # a source slug. Keep the first row, then enforce uniqueness.
+        c.execute(
+            "DELETE FROM chunks WHERE id NOT IN ("
+            "SELECT MIN(id) FROM chunks GROUP BY source_slug, chunk_idx"
+            ")"
+        )
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_slug_idx "
+            "ON chunks(source_slug, chunk_idx)"
+        )
         # Backfill source_pdf from jobs rows so existing data shows up in
         # the new PDF panel even though we never recorded the link before.
         import os

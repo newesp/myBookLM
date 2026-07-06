@@ -28,7 +28,7 @@ Uvicorn runs with `reload=True`. On startup, any `status='running'` job is reset
 
 ## Directory layers
 
-- **`books/`** — raw PDFs (immutable input)
+- **`raw_data/`** — raw PDFs (immutable input)
 - **`resources/`** — LLM-converted sources (renamed from `skills/`). Variable is `resources_dir` everywhere; app state: `app.state.resources_dir`.
 - **`wiki/`** — LLM-managed knowledge layer at project root. Not in `list_sources()`. Own routes at `/api/wiki/*`. Lazy-init from templates on first ingest.
 
@@ -46,7 +46,7 @@ Uvicorn runs with `reload=True`. On startup, any `status='running'` job is reset
 
 **`backend/llm.py`** — `chat()` unified interface. Always use `or` for config fallbacks (`cfg.get("key") or "default"`), not `.get("key", "default")` — empty string won't trigger the default but will break the URL.
 
-**`backend/embedding.py`** — `chunk_text()` (CHUNK_SIZE=800, OVERLAP=100) → Ollama `/api/embeddings` → cosine similarity. `has_embedding(slug)` checks DB. `_running_tasks` dict (same pattern as `conversion.py`).
+**`backend/embedding.py`** — `chunk_text()` (CHUNK_SIZE=800, OVERLAP=100) → Ollama `/api/embed` with `/api/embeddings` fallback → cosine similarity. `has_embedding(slug)` checks DB. `_running_tasks` dict (same pattern as `conversion.py`).
 
 **`backend/chat.py`** — `build_source_context` is `async`. skill.md → full-text injection; embedding-only → top-k retrieval. Ollama config always read for embedding even when another chat provider is active. Sentinel `__wiki__` in slugs list triggers wiki two-pass retrieval (Pass 1: `pick_pages`; Pass 2: inject block from `cfg["wiki"]["system_prompt_template"]`).
 
@@ -54,7 +54,7 @@ Uvicorn runs with `reload=True`. On startup, any `status='running'` job is reset
 
 **`backend/conversion.py`** — `slugify()` defined here (reuse it). Chapter files are the resume checkpoint — existing files are skipped.
 
-**`backend/sources.py`** — `delete_source(resources_dir, slug, kind=None)`: `kind=None/"all"` = full delete; `kind="embedding"` = chunks only; `kind="skill"` = files only. Route: `DELETE /api/sources/{slug}?type=embedding|skill|all`. `list_sources()` never returns the wiki. `link_source_pdf()` is idempotent.
+**`backend/sources.py`** — validates source slugs as single safe path segments before filesystem access. `unique_source_slug()` avoids mixing new conversion/embedding output with existing source files or chunks. `delete_source(resources_dir, slug, kind=None)`: `kind=None/"all"` = full delete; `kind="embedding"` = chunks only; `kind="skill"` = files only. Route: `DELETE /api/sources/{slug}?type=embedding|skill|all`. `list_sources()` never returns the wiki. `link_source_pdf()` is idempotent.
 
 **`backend/topics.py`** — `default_topic_id()` returns lowest-id topic. `add_source_to_topic()` is idempotent (`INSERT OR IGNORE`).
 
@@ -67,8 +67,11 @@ Uvicorn runs with `reload=True`. On startup, any `status='running'` job is reset
 
 ## Important notes
 
-- `.gitignore` excludes `data/`, `books/*.pdf`, `resources/`, `wiki/`, `.venv/`
-- `books/` keeps a `.gitkeep`
+- `.gitignore` excludes `data/`, `raw_data/*` (except `.gitkeep`), `resources/`, `wiki/`, `.venv/`
+- `raw_data/` keeps a `.gitkeep`
+- `GET /api/config` returns sanitized provider settings only; API keys are write-only from the frontend, and blank key fields preserve existing keys.
+- PDF uploads must be basename `.pdf` files with a PDF header and are capped at 200 MB; extraction rejects encrypted PDFs, PDFs over 1000 pages, and extracted text over 5,000,000 characters.
+- Cloud chat providers receive selected source/wiki/conversation text. Use Ollama for fully local processing when source privacy matters.
 - skill.md conversion requires a 7B+ LLM — 3B models reliably fail JSON planning
 - Wiki ingest = 1 Plan + N Apply LLM calls per click. Use a cheaper provider if budget-sensitive.
 - Vendored skill `backend/skills/llm-wiki/` is a copy of `~/.claude/skills/llm-wiki/`. `schema_version` in frontmatter signals drift.

@@ -2,6 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'">
 <title>myBookLM</title>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -67,7 +68,7 @@
       <div class="convert-layout">
         <div class="pdf-picker">
           <h2>PDF 檔案</h2>
-          <p class="hint">檔案放在 <code>books/</code> 資料夾，或從下方上傳。點「轉換」開始處理。</p>
+          <p class="hint">檔案放在 <code>raw_data/</code> 資料夾，或從下方上傳。點「轉換」開始處理。</p>
           <div class="pdf-actions">
             <label class="upload-btn">
               選擇檔案上傳

@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 from . import db, llm, topics as topicmod, sources as sourcemod
+from .json_utils import parse_llm_json
 from .pdf_utils import extract_pages, pages_to_text
 
 
@@ -96,7 +97,9 @@ async def _run_job(job_id: int, paths: dict, cfg: dict) -> None:
                 llm.calc_cost(pcfg, plan["tokens_in"], plan["tokens_out"]),
             )
             book_title = plan["book_title"]
-            book_slug = slugify(plan.get("book_slug") or plan["book_title"])
+            book_slug = sourcemod.unique_source_slug(
+                resources_dir, slugify(plan.get("book_slug") or plan["book_title"])
+            )
             chapters = plan["chapters"]
             # sanitize slugs
             for i, ch in enumerate(chapters):
@@ -231,10 +234,8 @@ BOOK TEXT (excerpt):
         max_tokens=4096, json_mode=True,
     )
     content = result["content"].strip()
-    content = re.sub(r"^```(?:json)?\s*\n?", "", content)
-    content = re.sub(r"\n?```\s*$", "", content)
     try:
-        data = json.loads(content)
+        data = parse_llm_json(content)
     except json.JSONDecodeError as e:
         raise llm.LLMError(f"Plan JSON parse failed: {e}; got: {content[:300]}")
     if "chapters" not in data or not isinstance(data["chapters"], list):

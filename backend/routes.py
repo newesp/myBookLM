@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import time
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +12,62 @@ from pydantic import BaseModel
 from . import db, config as cfgmod, sources, conversion, chat as chatmod, embedding as embmod, topics as topicmod, wiki as wikimod
 
 router = APIRouter()
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+WINDOWS_RESERVED_FILENAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+WINDOWS_INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
+
+
+def _public_config(cfg: dict) -> dict:
+    """Return config safe for the browser: API keys are write-only."""
+    public = json.loads(json.dumps(cfg))
+    for provider in public.get("providers", {}).values():
+        key = provider.get("api_key") or ""
+        provider["has_api_key"] = bool(key)
+        if "api_key" in provider:
+            provider["api_key"] = ""
+    return public
+
+
+def _validate_provider_url(provider: str, value: str) -> str:
+    """Constrain configurable upstream URLs to official or local endpoints."""
+    url = (value or "").strip().rstrip("/")
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    if provider == "openai":
+        if url == "https://api.openai.com/v1":
+            return url
+        if parsed.scheme in ("http", "https") and host in local_hosts:
+            return url
+    if provider == "ollama":
+        if parsed.scheme in ("http", "https") and host in local_hosts:
+            return url
+    raise HTTPException(
+        400,
+        f"{provider} base_url must be an official endpoint or a local-only URL",
+    )
+
+
+def _safe_pdf_filename(filename: str | None) -> str:
+    """Return a plain PDF file name or raise before touching disk."""
+    name = (filename or "").strip()
+    if not name:
+        raise HTTPException(400, "PDF filename is required")
+    if any(sep in name for sep in ("/", "\\")) or Path(name).name != name or Path(name).drive:
+        raise HTTPException(400, "PDF filename must be a file name, not a path")
+    if any(ch in WINDOWS_INVALID_FILENAME_CHARS or ord(ch) < 32 for ch in name):
+        raise HTTPException(400, "PDF filename contains invalid characters")
+    if name.endswith((" ", ".")):
+        raise HTTPException(400, "PDF filename cannot end with space or dot")
+    if Path(name).stem.upper() in WINDOWS_RESERVED_FILENAMES:
+        raise HTTPException(400, "PDF filename uses a reserved Windows device name")
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are accepted")
+    return name
 
 
 # ---------- Config ----------
@@ -23,22 +80,34 @@ class ConfigUpdate(BaseModel):
 
 @router.get("/config")
 def get_config(request: Request):
-    return cfgmod.load_config(request.app.state.config_path)
+    return _public_config(cfgmod.load_config(request.app.state.config_path))
 
 
 @router.post("/config")
 def update_config(body: ConfigUpdate, request: Request):
     cfg = cfgmod.load_config(request.app.state.config_path)
     if body.active_provider:
+        if body.active_provider not in cfg["providers"]:
+            raise HTTPException(400, "Unknown provider")
         cfg["active_provider"] = body.active_provider
     if body.providers:
         for name, updates in body.providers.items():
             if name not in cfg["providers"]:
                 continue
             for k, v in updates.items():
+                if k == "has_api_key":
+                    continue
                 if k == "pricing" and isinstance(v, dict):
                     cfg["providers"][name].setdefault("pricing", {})
                     cfg["providers"][name]["pricing"].update(v)
+                elif k == "api_key":
+                    # API keys are write-only from the browser. Blank values mean
+                    # "leave unchanged" so a sanitized config load does not erase
+                    # a previously saved key.
+                    if v:
+                        cfg["providers"][name][k] = v
+                elif k == "base_url":
+                    cfg["providers"][name][k] = _validate_provider_url(name, v)
                 else:
                     cfg["providers"][name][k] = v
     if body.wiki:
@@ -46,7 +115,7 @@ def update_config(body: ConfigUpdate, request: Request):
         for k, v in body.wiki.items():
             cfg["wiki"][k] = v
     cfgmod.save_config(request.app.state.config_path, cfg)
-    return cfg
+    return _public_config(cfg)
 
 
 # ---------- Sources ----------
@@ -68,13 +137,19 @@ def delete_source(slug: str, request: Request, type: str | None = None):
     """
     if type not in (None, "all", "embedding", "skill"):
         raise HTTPException(400, "type must be one of: all, embedding, skill")
-    sources.delete_source(request.app.state.resources_dir, slug, kind=type)
+    try:
+        sources.delete_source(request.app.state.resources_dir, slug, kind=type)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
 @router.get("/sources/{slug}/content")
 def get_source_content(slug: str, request: Request):
-    return sources.get_source_content(request.app.state.resources_dir, slug)
+    try:
+        return sources.get_source_content(request.app.state.resources_dir, slug)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 class RenameSource(BaseModel):
@@ -86,7 +161,10 @@ def rename_source(slug: str, body: RenameSource, request: Request):
     new_name = body.name.strip()
     if not new_name:
         raise HTTPException(400, "Name cannot be empty")
-    sources.rename_source(request.app.state.resources_dir, slug, new_name)
+    try:
+        sources.rename_source(request.app.state.resources_dir, slug, new_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True, "slug": slug, "name": new_name}
 
 
@@ -101,9 +179,11 @@ def save_from_response(body: SaveAsSourceBody, request: Request):
     raw = re.sub(r"[^\w\s\-]", "", body.title.lower())
     raw = re.sub(r"[\s_]+", "-", raw).strip("-")
     raw = re.sub(r"-+", "-", raw)[:40] or "note"
-    slug = f"note-{raw}-{int(time.time()) % 1_000_000}"
+    slug = sources.unique_source_slug(
+        request.app.state.resources_dir, f"note-{raw}-{int(time.time()) % 1_000_000}"
+    )
 
-    skill_dir = request.app.state.resources_dir / slug
+    skill_dir = sources.source_path(request.app.state.resources_dir, slug)
     skill_dir.mkdir(parents=True, exist_ok=True)
 
     skill_md = f"""---
@@ -198,14 +278,28 @@ def get_pdfs(request: Request):
 
 @router.post("/pdfs/upload")
 async def upload_pdf(request: Request, file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are accepted")
-    dest = request.app.state.books_dir / file.filename
+    pdf_name = _safe_pdf_filename(file.filename)
+    dest = request.app.state.books_dir / pdf_name
+    if dest.exists():
+        raise HTTPException(409, "PDF already exists")
+    written = 0
+    first_chunk = True
     with open(dest, "wb") as out:
         while True:
             chunk = await file.read(8192)
             if not chunk:
                 break
+            if first_chunk:
+                first_chunk = False
+                if not chunk.startswith(b"%PDF-"):
+                    out.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(400, "Uploaded file is not a PDF")
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, "PDF exceeds the 200 MB upload limit")
             out.write(chunk)
     return {"ok": True, "name": file.filename}
 
@@ -226,7 +320,8 @@ def list_jobs():
 
 @router.post("/jobs")
 async def create_job(body: StartJob, request: Request):
-    pdf_path = request.app.state.books_dir / body.pdf_filename
+    pdf_name = _safe_pdf_filename(body.pdf_filename)
+    pdf_path = request.app.state.books_dir / pdf_name
     if not pdf_path.exists():
         raise HTTPException(404, "PDF not found in raw_data/")
     cfg = cfgmod.load_config(request.app.state.config_path)
@@ -252,13 +347,16 @@ async def create_job(body: StartJob, request: Request):
 
 @router.post("/pdfs/embed")
 async def create_embed_job(body: StartJob, request: Request):
-    pdf_path = request.app.state.books_dir / body.pdf_filename
+    pdf_name = _safe_pdf_filename(body.pdf_filename)
+    pdf_path = request.app.state.books_dir / pdf_name
     if not pdf_path.exists():
         raise HTTPException(404, "PDF not found in raw_data/")
     cfg = cfgmod.load_config(request.app.state.config_path)
     ollama_cfg = cfg["providers"]["ollama"]
 
-    slug = embmod.slugify_pdf(pdf_path.stem)
+    slug = sources.unique_source_slug(
+        request.app.state.resources_dir, embmod.slugify_pdf(pdf_path.stem)
+    )
     skill_dir = request.app.state.resources_dir / slug
     skill_dir.mkdir(parents=True, exist_ok=True)
 
@@ -354,7 +452,7 @@ def delete_done_jobs():
 
 
 @router.delete("/jobs/{job_id}")
-def delete_job(job_id: int, keep_files: bool = False):
+def delete_job(job_id: int, request: Request, keep_files: bool = False):
     with db.conn() as c:
         row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
@@ -384,13 +482,20 @@ def delete_job(job_id: int, keep_files: bool = False):
                     c.execute("DELETE FROM chunks WHERE source_slug=?", (slug,))
                     c.commit()
                 # Remove directory only if it has no SKILL.md (embedding-only)
-                sd = Path(row["skill_dir"]) if row["skill_dir"] else None
+                try:
+                    sd = sources.source_path(request.app.state.resources_dir, slug)
+                except ValueError:
+                    sd = None
                 if sd and sd.exists() and not (sd / "SKILL.md").exists():
                     shutil.rmtree(sd, ignore_errors=True)
         else:
-            if row["skill_dir"]:
-                sd = Path(row["skill_dir"])
-                if sd.exists():
+            slug = row["skill_slug"]
+            if slug:
+                try:
+                    sd = sources.source_path(request.app.state.resources_dir, slug)
+                except ValueError:
+                    sd = None
+                if sd and sd.exists():
                     shutil.rmtree(sd, ignore_errors=True)
 
     return {"ok": True}
