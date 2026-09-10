@@ -14,6 +14,26 @@ A local alternative to NotebookLM. The purpose is not to replicate NotebookLM’
 - **Conversation management**: Multiple conversations, clear history, token and cost display per message
 - **Job management**: Conversions can be paused, resumed, and deleted (single or bulk-clear all completed log rows); resumes automatically from the last completed chapter after restart
 
+## Tech Stack
+
+- **Backend**:
+  - **[FastAPI](https://fastapi.tiangolo.com/)**: Asynchronous Python web framework providing high-performance REST APIs
+  - **[Uvicorn](https://www.uvicorn.org/)**: ASGI server for running the FastAPI application
+  - **[SQLite](https://sqlite.org/)**: Embedded relational database for persistent storage (jobs, conversations, chat messages, topics, and vector chunks)
+  - **[HTTPX](https://www.python-httpx.org/)**: Fully async HTTP client for connecting to LLM provider APIs and local Ollama
+  - **[pypdf](https://pypdf.readthedocs.io/)**: Pure-Python library for PDF text extraction and document handling
+  - **[Pydantic](https://docs.pydantic.dev/)**: Data validation and configuration management
+  - **[python-multipart](https://andrew-d.github.io/python-multipart/)**: Streaming multipart parser for handling PDF file uploads
+- **Frontend**:
+  - **Vanilla JavaScript (ES6+), HTML5, CSS3**: Pure, lightweight single-page interface without heavy frameworks or build tools
+  - **[Marked](https://marked.js.org/)**: High-speed Markdown parser and renderer for AI responses and source views
+- **AI & RAG Engine**:
+  - **[Ollama](https://ollama.com/)**: Local LLM runner and embedding service (`nomic-embed-text`)
+  - **Multi-Provider LLM Integration**: Anthropic Claude, Google Gemini, xAI Grok, OpenAI (ChatGPT / compatible APIs), and Ollama
+  - **Hybrid RAG**: Direct full-text injection for `skill.md` sources, vector chunk retrieval via pure-Python cosine similarity for embedding sources, and two-pass routing for [LLM Wiki](backend/skills/llm-wiki/)
+- **DevOps & CI**:
+  - **GitHub Actions**: Automated CI workflow verifying Python compilation, FastAPI smoke testing, and JavaScript syntax
+
 ## Installation
 
 **Requirements**: Python 3.10+, [Ollama](https://ollama.com) (for local inference and embedding)
